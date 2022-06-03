@@ -1,8 +1,7 @@
-from audioop import add
 import logging as logger
+import re
 from dataclasses import dataclass
 from enum import Enum
-import re
 from typing import Dict, List, Optional
 from xml.dom import ValidationErr
 
@@ -87,17 +86,6 @@ def is_register(string):
 
 def is_hex(string: str):
     return string.startswith("0x")
-
-
-@dataclass
-class OpCode:
-    """OpCode class"""
-
-    opcode: str
-    d: Optional[int]
-    reg: Optional[str]
-    has_s: bool = False
-    has_d: bool = False
 
 
 SIZE_PREFIX = 66
@@ -222,13 +210,56 @@ class OperandTypes(Enum):
     Memory = 2
 
 
+@dataclass
+class OpCode:
+    """OpCode class"""
+
+    opcode: str
+    skip_d: bool = False
+    d: Optional[int] = None
+    skip_s: bool = True
+
+    reg: Optional[str] = None
+    skip_reg: bool = False
+
+    rm: Optional[str] = None
+    skip_rm: bool = False
+
+    mod: Optional[MOD_32] = None
+    skip_mod: bool = False
+
+
 opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
     "mov": {
         OperandTypes.REGISTER: {
             OperandTypes.REGISTER: OpCode(
-                "100010",
-                0,
-                None,
+                opcode="100010",
+                d=0,
+            ),
+        },
+        OperandTypes.IMMEDIATE: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="1011", skip_d=True, skip_mod=True, skip_rm=True
+            ),
+        },
+    },
+    "add": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="000000",
+                d=0,
+                mod=MOD_32.REG_ADDR,
+            )
+        }
+    },
+    "adc": {
+        OperandTypes.IMMEDIATE: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="100000",
+                skip_d=True,
+                skip_s=False,
+                mod=MOD_32.REG_ADDR,
+                reg="010",
             ),
         }
     },
@@ -285,7 +316,7 @@ class Operand:
         else:
             raise ValueError(f"Unknown addressing mode {self._raw}")
 
-    def operand_size(self) -> int:
+    def get_size(self) -> int:
         if self.get_type() == OperandTypes.REGISTER:
             if self._raw in REGISTER_64_BIT:
                 return 64
@@ -344,21 +375,6 @@ class Operand:
                 return int(comp, 16)
         raise ValidationErr(f"disp not found {self._raw}")
 
-    def get_used_register_size(self) -> int:
-        """Returns the used register size in bits"""
-        if set(self.get_registers_used()).issubset(REGISTER_64_BIT):
-            return 64
-        elif set(self.get_registers_used()).issubset(REGISTER_32_BIT):
-            return 32
-        elif set(self.get_registers_used()).issubset(REGISTER_16_BIT):
-            return 16
-        elif set(self.get_registers_used()).issubset(REGISTER_8_BIT):
-            return 8
-        else:
-            raise ValueError(
-                f"Unknown register size: {self.get_registers_used()}"
-            )
-
     def _get_address(self) -> str:
         return self._raw.split("[")[1].removeprefix("]")
 
@@ -368,55 +384,52 @@ class Input:
     """Validates and Accesses the input"""
 
     operation: str
-    dest_operand: Optional[Operand]
     first_operand: Optional[Operand]
+    second_operand: Optional[Operand]
 
     def get_operation_used_registers_size(self) -> int:
-        if self.dest_operand is None:
-            raise ValueError(f"No operands for {self.operation}")
-        first_operand_register_size = (
-            self.dest_operand.get_used_register_size()
-        )
-
         if self.first_operand is None:
-            return first_operand_register_size
-
-        if (
-            first_operand_register_size
-            != self.first_operand.get_used_register_size()
-        ):
-            raise ValueError(
-                f"Operands have different register sizes: {self.dest_operand} {self.first_operand}"
-            )
-        return first_operand_register_size
+            raise ValueError(f"No operands for {self.operation}")
+        if self.first_operand.get_type() in [
+            OperandTypes.Memory,
+            OperandTypes.REGISTER,
+        ]:
+            return self.first_operand.get_size()
+        elif self.second_operand and self.second_operand.get_type() in [
+            OperandTypes.Memory,
+            OperandTypes.REGISTER,
+        ]:
+            return self.second_operand.get_size()
+        else:
+            raise ValidationErr(f"No size for this operation {input}")
 
     def get_addressing_mode(self) -> AddressingModes:
-        if self.dest_operand is None:
+        if self.second_operand is None:
             raise ValueError(f"No operands for {self.operation}")
 
         if self.first_operand is None:
-            if self.dest_operand.get_type() == OperandTypes.REGISTER:
+            if self.second_operand.get_type() == OperandTypes.REGISTER:
                 return AddressingModes.REG_ADDR
-            elif self.dest_operand.get_type() == OperandTypes.IMMEDIATE:
+            elif self.second_operand.get_type() == OperandTypes.IMMEDIATE:
                 return AddressingModes.IMM_ADDR
             else:
                 raise NotImplementedError(
-                    f"Unknown operand type: {self.dest_operand}"
+                    f"Unknown operand type: {self.second_operand}"
                 )
 
         if (
-            self.dest_operand.get_type() == OperandTypes.REGISTER
+            self.second_operand.get_type() == OperandTypes.REGISTER
             and self.first_operand.get_type() == OperandTypes.REGISTER
         ):
             return AddressingModes.REG_ADDR
         elif (
-            self.dest_operand.get_type() == OperandTypes.IMMEDIATE
+            self.second_operand.get_type() == OperandTypes.IMMEDIATE
             and self.first_operand.get_type() == OperandTypes.REGISTER
         ):
             return AddressingModes.IMM_ADDR
         else:
             raise NotImplementedError(
-                f"Unknown operand types: {self.dest_operand} {self.first_operand}"
+                f"Unknown operand types: {self.second_operand} {self.first_operand}"
             )
 
 
@@ -442,12 +455,38 @@ def parse_instruction(instruction: str) -> Input:
     return Input(operation, Operand(first_operand), Operand(second_operand))
 
 
-def get_opcode(
-    operation: str,
-    operand_dest: Optional[Operand],
-    operand_src: Optional[Operand],
-) -> OpCode:
+def get_prefix(input: Input) -> Optional[str]:
+    dest = input.second_operand
+    src = input.first_operand
+
+    size = 0
+    address = 0
+    for operand in [dest, src]:
+        if operand is None:
+            continue
+        if operand.get_type() == OperandTypes.IMMEDIATE:
+            continue
+        size = operand.get_size()
+        if operand.get_type() == OperandTypes.Memory:
+            address = operand.get_size()
+
+    prefix1 = operand_prefix_table[size]
+    prefix2 = address_prefix_table.get(address, False)
+
+    prefix = ""
+    if prefix1 is True:
+        prefix += str(SIZE_PREFIX)
+    if prefix2 is True:
+        prefix += str(ADDRESS_PREFIX)
+
+    return prefix
+
+
+def get_opcode(input: Input) -> OpCode:
     """Returns the opcode"""
+    operation = input.operation
+    operand_dest = input.first_operand
+    operand_src = input.second_operand
     operation_modes = opcode_table.get(operation)
     if not operation_modes:
         raise ValueError(f"Operation {operation} not found")
@@ -472,65 +511,43 @@ def get_opcode(
     return result
 
 
-def get_prefix(input: Input) -> Optional[str]:
-    dest = input.dest_operand
-    src = input.first_operand
+def get_s(input: Input) -> Optional[int]:
+    """Returns the s bit"""
+    if not input.second_operand or not input.first_operand:
+        return None
+    if not input.second_operand.get_type() == OperandTypes.IMMEDIATE:
+        return None
 
-    size = 0
-    address = 0
-    for operand in [dest, src]:
-        if operand is None:
-            continue
-        size = operand.operand_size()
-        if operand.get_type() == OperandTypes.Memory:
-            address = operand.get_used_register_size()
+    imm_data_size = len(bin(input.second_operand.get_value()))
 
-    prefix1 = operand_prefix_table[size]
-    prefix2 = address_prefix_table.get(address, False)
+    if imm_data_size == 8 and input.first_operand.get_size() > 8:
+        return 1
 
-    prefix = ""
-    if prefix1 is True:
-        prefix += str(SIZE_PREFIX)
-    if prefix2 is True:
-        prefix += str(ADDRESS_PREFIX)
-
-    return prefix
+    return 0
 
 
 def get_d(input: Input) -> Optional[int]:
     """Returns the D value"""
-    if input.first_operand is None:
+    if get_opcode(input).d is not None:
+        logger.debug(f"opcode defined d itself {get_opcode(input).d}")
+        return get_opcode(input).d
+    elif (
+        input.second_operand
+        and input.second_operand.get_type() == OperandTypes.REGISTER
+    ):
         return 0
-
-    if input.dest_operand is None:
-        return 0
-
-    op_code = get_opcode(
-        input.operation,
-        input.dest_operand,
-        input.first_operand,
-    )
-    if op_code.has_s:
-        return None
-
-    if op_code.d is not None:
-        return op_code.d
-
-    if input.dest_operand.get_type() == OperandTypes.REGISTER:
-        return 0
-
-    elif input.first_operand.get_type() in [
-        OperandTypes.Memory,
-        OperandTypes.IMMEDIATE,
-    ]:
-        return 0
+    elif (
+        input.first_operand
+        and input.first_operand.get_type() == OperandTypes.REGISTER
+    ):
+        return 1
 
 
 def get_code_w(input: Input):
     """Returns the W value"""
     if input.first_operand is None:
         return 1
-    if input.dest_operand is None:
+    if input.second_operand is None:
         return None
 
     if input.operation in ["bsf", "bsr"]:
@@ -543,21 +560,21 @@ def get_code_w(input: Input):
 
 def get_mod(input: Input) -> Optional[MOD_32]:
     """Returns the MOD/RM value"""
-    if input.dest_operand is None:
+    if input.second_operand is None:
         return None
 
     if input.first_operand is None:
-        if input.dest_operand.get_type() in [
+        if input.second_operand.get_type() in [
             OperandTypes.Memory,
             OperandTypes.IMMEDIATE,
         ]:
             raise NotImplementedError(
-                f"Unknown operand type: {input.dest_operand}"
+                f"Unknown operand type: {input.second_operand}"
             )
         return MOD_32.REG_ADDR
 
     if OperandTypes.Memory in [
-        input.dest_operand.get_type(),
+        input.second_operand.get_type(),
         input.first_operand.get_type(),
     ]:
         raise NotImplementedError()
@@ -567,83 +584,149 @@ def get_mod(input: Input) -> Optional[MOD_32]:
 
 def get_rm(input: Input):
     """Returns the RM value"""
-    if input.dest_operand is None:
+    if input.second_operand is None:
         return None
+    to_code = None
     if get_d(input) == 0:
         # rm codes the destination
-        logger.debug(f"rm codes the dest {input.dest_operand}")
-        if input.dest_operand.get_type() == OperandTypes.REGISTER:
-            return rm_table_32_bit[input.dest_operand.get_registers_used()[0]]
-        else:
-            raise NotImplementedError()
+        to_code = input.first_operand
+    elif get_d(input) == 1:
+        # rm codes the source
+        to_code = input.first_operand
+    else:
+        raise NotImplementedError()
+
+    if to_code is None:
+        raise RuntimeError
+    logger.debug(f"rm codes the {to_code}")
+
+    if to_code.get_type() == OperandTypes.REGISTER:
+        return rm_table_32_bit[to_code.get_registers_used()[0]]
     else:
         raise NotImplementedError()
 
 
 def get_reg(input: Input) -> Optional[str]:
     """Returns the REG value"""
-    if input.dest_operand is None:
-        return None
     if get_d(input) == 0:
-        # reg codes the source
-        logger.debug(f"reg codes the dest {input.first_operand}")
-        if input.first_operand is None:
-            raise ValueError(f"No second operand for {input.operation}")
-        if input.first_operand.get_type() == OperandTypes.REGISTER:
-            return register_code_table_32[
-                input.first_operand.get_registers_used()[0]
-            ]
+        to_code = input.second_operand
+        logger.debug(f"reg codes the {to_code}")
+        if to_code is None:
+            raise ValueError(f"No second operand for {to_code}")
+        if to_code.get_type() == OperandTypes.REGISTER:
+            return register_code_table_32[to_code.get_registers_used()[0]]
         else:
             raise NotImplementedError()
+    else:
+        to_code = input.first_operand
+        logger.debug(f"reg codes the {to_code}")
+        if to_code is None:
+            raise ValueError(f"No first operand {to_code}")
+        if to_code.get_type() == OperandTypes.REGISTER:
+            return register_code_table_32[to_code.get_registers_used()[0]]
+        else:
+            raise NotImplementedError()
+
+
+def reverse_byte_wise(binary: str) -> str:
+    new_num = ""
+    for i in range(len(str(binary)), 0, -8):
+        new_num += str(binary)[i:]
+    new_num += binary[0:8]
+    return new_num
+
+
+def get_data(input) -> Optional[str]:
+    """Returns the data value"""
+    if (
+        input.second_operand
+        and input.second_operand.get_type() == OperandTypes.IMMEDIATE
+    ):
+        return format(
+            input.second_operand.get_value(),
+            f"0{input.first_operand.get_size()}b",
+        )
 
 
 def get_code(asm_instruction: str):
     print("======================")
     input = parse_instruction(asm_instruction)
-    op_code = get_opcode(
-        input.operation,
-        input.dest_operand,
-        input.first_operand,
-    )
+    print(input)
+    op_code = get_opcode(input)
     print(asm_instruction)
     result = ""
     prefix = get_prefix(input)
-    if prefix is not None:
-        result += prefix
+    print(f"prefix {prefix}")
 
     result += op_code.opcode
     print(f"op: {op_code.opcode}")
-    d = get_d(input)
-    if d is not None:
-        result += str(d)
-    print(f"d:{d}")
+
+    if not op_code.skip_d:
+        d = get_d(input)
+        if d is not None:
+            result += str(d)
+        print(f"d:{d}")
+
+    if not op_code.skip_s:
+        s = get_s(input)
+        result += str(s)
 
     w = get_code_w(input)
     if w is not None:
         result += str(w)
     print(f"w: {w}")
 
-    mod = get_mod(input)
-    if mod is not None:
-        print(f"mod: {mod.value}")
-        result += str(mod.value)
+    if not op_code.skip_mod:
+        mod = get_mod(input)
+        if mod is not None:
+            print(f"mod: {mod.value}")
+            result += str(mod.value)
 
     reg = get_reg(input)
     if reg is not None:
         result += reg
     print(f"reg: {reg}")
 
-    rm = get_rm(input)
-    print(f"rm: {rm}")
-    if rm is not None:
-        result += rm
+    if not op_code.skip_rm:
+        rm = get_rm(input)
+        print(f"rm: {rm}")
+        if rm is not None:
+            result += rm
+
+    data = get_data(input)
+    if data is not None:
+        formatted = reverse_byte_wise(data)
+        print(f"data: {formatted}")
+        result += formatted
+
+    hex_value = hex(int("1" + result, 2))[3:]
+    if prefix:
+        hex_value = prefix + hex_value
+    result = hex_value
+    print(result)
     return result
 
 
-assert get_code("mov al,bh") == "1000100011111000"
+# mov
 
-assert get_code("mov dl,bl") == "1000100011011010"
+assert get_code("mov al,bh") == "88f8"
 
-assert get_code("mov eax,ebx") == "1000100111011000"
+assert get_code("mov dl,bl") == "88da"
 
-print(get_code("mov al,cl"))
+assert get_code("mov ecx,eax") == "89c1"
+
+assert get_code("mov cl,al") == "88c1"
+
+assert get_code("mov cx,ax") == "6689c1"
+
+assert (get_code("mov dx,0x1352")) == "66ba5213"
+
+assert (get_code("mov dx,0x3545")) == "66ba4535"
+
+
+# add
+assert (get_code("add ecx,eax")) == "01c1"
+
+assert get_code("add cx,ax") == "6601c1"
+
+assert get_code("adc dx,0x3545") == "6681d24535"
