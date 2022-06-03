@@ -1,9 +1,11 @@
 import logging as logger
+import pdb
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional
-from xml.dom import ValidationErr
+
+ValidationErr = RuntimeError
 
 logger.basicConfig(level=logger.DEBUG)
 
@@ -82,6 +84,19 @@ def get_all_registers():
 
 def is_register(string):
     return string in get_all_registers()
+
+
+def get_register_size(string) -> int:
+    if string in REGISTER_64_BIT:
+        return 64
+    elif string in REGISTER_16_BIT:
+        return 16
+    elif string in REGISTER_32_BIT:
+        return 32
+    elif string in REGISTER_8_BIT:
+        return 8
+    else:
+        raise ValueError(f"Invalid register {string}")
 
 
 def is_hex(string: str):
@@ -177,9 +192,19 @@ class MOD_32(Enum):
     """Mod values for 32bits"""
 
     NO_DISP = "00"
+    SIB = "00"
     DISP8 = "01"
     DISP32 = "10"
     REG_ADDR = "11"
+
+
+class Scale(Enum):
+    """Scale values"""
+
+    ONE = "00"
+    TWO = "01"
+    FOUR = "10"
+    EIGHT = "11"
 
 
 class AddressingModes(Enum):
@@ -188,7 +213,7 @@ class AddressingModes(Enum):
     Examples:
     REG_ADDR: `mov ax, bx`
     IMM_ADDR: `mov ax, 0x1234`
-    DIRECT_ADDR: `mov ax, [0x1234]`
+    DIRECT_ADDR: `mov ax, [0x1234]` or `mov ax, [ebx]`
     REG_INDIRECT_ADDR: `mov ax, [bx+cx]`
     REG_INDIRECT_ADDR_DISP: `mov ax, [bx+cx+0x1234]`
     REG_INDIRECT_ADDR_DISP_SCALE: `mov ax, [bx+cx*8+18]`
@@ -222,6 +247,7 @@ class OpCode:
     reg: Optional[str] = None
     skip_reg: bool = False
 
+    rm_codes: Optional[int] = None
     rm: Optional[str] = None
     skip_rm: bool = False
 
@@ -242,6 +268,7 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 opcode="1011", skip_d=True, skip_mod=True, skip_rm=True
             ),
         },
+        OperandTypes.Memory: {OperandTypes.REGISTER: OpCode(opcode="100010")},
     },
     "add": {
         OperandTypes.REGISTER: {
@@ -250,7 +277,10 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 d=0,
                 mod=MOD_32.REG_ADDR,
             )
-        }
+        },
+        OperandTypes.Memory: {
+            OperandTypes.REGISTER: OpCode(opcode="000000", d=1)
+        },
     },
     "adc": {
         OperandTypes.IMMEDIATE: {
@@ -260,6 +290,7 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 skip_s=False,
                 mod=MOD_32.REG_ADDR,
                 reg="010",
+                rm_codes=1,
             ),
         }
     },
@@ -276,7 +307,7 @@ class Operand:
             return OperandTypes.REGISTER
         elif self._raw.startswith("0x"):
             return OperandTypes.IMMEDIATE
-        elif "PTR" in self._raw and "+" in self._raw:
+        elif "PTR" in self._raw:
             return OperandTypes.Memory
         else:
             raise NotImplementedError(f"Unknown operand type: {self._raw}")
@@ -284,7 +315,7 @@ class Operand:
     def get_registers_used(self) -> List[str]:
         """Returns a list of registers used by this operand"""
         used = []
-        tokenized = re.split("[, \+\*]+", self._raw)
+        tokenized = re.split("\[|\]|,| |\+|\*", self._raw)
         for token in tokenized:
             if token in get_all_registers():
                 used.append(token)
@@ -300,9 +331,10 @@ class Operand:
     def get_addressing_mode(self) -> AddressingModes:
         if "PTR" in self._raw:
             address = self._get_address()
+            logger.debug(address)
             if is_register(address) or is_hex(address):
                 return AddressingModes.DIRECT_ADDR
-            elif "+" in self._raw or "*" in self._raw:
+            elif not is_hex(address.split("+")[-1]) and "*" in address:
                 return AddressingModes.REG_INDIRECT_ADDR
             elif is_hex(address.split("+")[-1]):
                 return AddressingModes.REG_INDIRECT_ADDR_DISP
@@ -318,65 +350,72 @@ class Operand:
 
     def get_size(self) -> int:
         if self.get_type() == OperandTypes.REGISTER:
-            if self._raw in REGISTER_64_BIT:
-                return 64
-            elif self._raw in REGISTER_16_BIT:
-                return 16
-            elif self._raw in REGISTER_32_BIT:
-                return 32
-            elif self._raw in REGISTER_8_BIT:
-                return 8
+            return get_register_size(self._raw)
 
         if self.get_type() == OperandTypes.Memory:
-            if "BYTE" in self._raw:
-                return 8
-            elif "WORD" in self._raw:
-                return 16
-            elif "DWORD" in self._raw:
-                return 32
-            elif "QWORD" in self._raw:
-                return 64
+            reg = self.get_registers_used()
+            if reg:
+                return get_register_size(reg[0])
+            if self.get_addressing_mode() == AddressingModes.DIRECT_ADDR:
+                if "BYTE" in self._raw:
+                    return 8
+                elif "WORD" in self._raw:
+                    return 16
+                elif "DWORD" in self._raw:
+                    return 32
+                elif "QWORD" in self._raw:
+                    return 64
 
         raise RuntimeError(
             f"cannot get address size for this operand {self._raw}"
         )
 
     def get_base(self) -> Optional[str]:
+        if self.get_type() != OperandTypes.Memory:
+            return None
         addr = self._get_address()
-        if "+" in self._raw:
-            return self._raw.split("+")[0]
+        addr_mode = self.get_addressing_mode()
+        if addr_mode == AddressingModes.DIRECT_ADDR:
+            if is_hex(addr):
+                return None
+            return self.get_registers_used()[0]
+        elif (
+            addr_mode
+            in [
+                AddressingModes.REG_INDIRECT_ADDR,
+                AddressingModes.REG_INDIRECT_ADDR_DISP,
+            ]
+            and "*" not in addr.split("+")[0]
+        ):
+            return addr.split("+")[0]
+        else:
+            return None
 
-        # no + and * is direct addressing
-        if "*" not in self._raw:
-            return addr
-        return None
-
-    def get_index(self) -> str:
+    def get_index(self) -> Optional[str]:
         addr = self._get_address()
         components = addr.split("+")
         for comp in components:
             if "*" in comp:
                 return comp.split("*")[0]
-        raise ValidationErr(f"index not found {self._raw}")
+        return None
 
-    def get_scale(self) -> int:
+    def get_scale(self) -> Optional[int]:
         addr = self._get_address()
         components = addr.split("+")
         for comp in components:
             if "*" in comp:
                 return int(comp.split("*")[1], 16)
-        raise ValidationErr(f"scale not found {self._raw}")
+        return None
 
-    def get_disp(self) -> int:
+    def get_disp(self) -> Optional[int]:
         addr = self._get_address()
         components = addr.split("+")
         for comp in components:
             if comp.startswith("0x"):
                 return int(comp, 16)
-        raise ValidationErr(f"disp not found {self._raw}")
 
     def _get_address(self) -> str:
-        return self._raw.split("[")[1].removeprefix("]")
+        return self._raw.split("[")[1].removesuffix("]")
 
 
 @dataclass
@@ -441,8 +480,6 @@ def parse_instruction(instruction: str) -> Input:
     logger.debug(f"operation is: {operation}")
     cursor = len(operation)
 
-    # TODO: validate input
-
     while instruction[cursor] != ",":
         cursor += 1
 
@@ -469,6 +506,7 @@ def get_prefix(input: Input) -> Optional[str]:
         size = operand.get_size()
         if operand.get_type() == OperandTypes.Memory:
             address = operand.get_size()
+            logger.debug(f"operand {operand} size is {address}")
 
     prefix1 = operand_prefix_table[size]
     prefix2 = address_prefix_table.get(address, False)
@@ -497,7 +535,7 @@ def get_opcode(input: Input) -> OpCode:
 
     if not result:
         raise ValueError(
-            f"Operation {operation} with source operand type {operand_src} not found"
+            f"Operation {operation} with source operand type {operand_src.get_type()} not found"
         )
 
     if operand_dest:
@@ -527,9 +565,8 @@ def get_s(input: Input) -> Optional[int]:
 
 
 def get_d(input: Input) -> Optional[int]:
-    """Returns the D value"""
+    """if d is 1, the first operand is a register"""
     if get_opcode(input).d is not None:
-        logger.debug(f"opcode defined d itself {get_opcode(input).d}")
         return get_opcode(input).d
     elif (
         input.second_operand
@@ -558,32 +595,59 @@ def get_code_w(input: Input):
         return 1
 
 
+def calculate_disp_size(operand: Operand) -> int:
+    disp_size = len(bin(operand.get_disp())) - 1
+    return disp_size
+
+
 def get_mod(input: Input) -> Optional[MOD_32]:
     """Returns the MOD/RM value"""
-    if input.second_operand is None:
-        return None
+    op_code = get_opcode(input)
+    if op_code.mod is not None:
+        return op_code.mod
 
-    if input.first_operand is None:
-        if input.second_operand.get_type() in [
-            OperandTypes.Memory,
-            OperandTypes.IMMEDIATE,
+    to_code = None
+    if get_d(input) == 0:
+        to_code = input.first_operand
+    elif get_d(input) == 1:
+        to_code = input.second_operand
+
+    if to_code is None:
+        raise RuntimeError(f"No operand to code")
+
+    if to_code.get_type() == OperandTypes.Memory:
+        addr_mod = to_code.get_addressing_mode()
+        if addr_mod in [
+            AddressingModes.DIRECT_ADDR,
         ]:
-            raise NotImplementedError(
-                f"Unknown operand type: {input.second_operand}"
-            )
+            return MOD_32.SIB
+        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR:
+            if to_code.get_base() == "ebp":
+                return MOD_32.DISP8
+            return MOD_32.SIB
+        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR_DISP:
+            if to_code.get_base() is None:
+                logger.debug(
+                    f"operand has displacement but base is {to_code.get_base()} so use SIB for mod"
+                )
+                return MOD_32.SIB
+            disp_size = calculate_disp_size(to_code)
+            if disp_size <= 8:
+                return MOD_32.DISP8
+            elif disp_size <= 32:
+                return MOD_32.DISP32
+            else:
+                raise RuntimeError(f"Unknown displacement size: {disp_size}")
+
+    elif to_code.get_type() == OperandTypes.REGISTER:
         return MOD_32.REG_ADDR
-
-    if OperandTypes.Memory in [
-        input.second_operand.get_type(),
-        input.first_operand.get_type(),
-    ]:
-        raise NotImplementedError()
-
-    return MOD_32.REG_ADDR
+    else:
+        raise NotImplementedError(f"Unknown operand type: {to_code}")
 
 
 def get_rm(input: Input):
     """Returns the RM value"""
+    SIB = "100"
     if input.second_operand is None:
         return None
     to_code = None
@@ -592,9 +656,12 @@ def get_rm(input: Input):
         to_code = input.first_operand
     elif get_d(input) == 1:
         # rm codes the source
+        to_code = input.second_operand
+    op_code = get_opcode(input)
+    if op_code.rm_codes == 1:
         to_code = input.first_operand
-    else:
-        raise NotImplementedError()
+    elif op_code.rm_codes == 2:
+        to_code = input.second_operand
 
     if to_code is None:
         raise RuntimeError
@@ -602,37 +669,91 @@ def get_rm(input: Input):
 
     if to_code.get_type() == OperandTypes.REGISTER:
         return rm_table_32_bit[to_code.get_registers_used()[0]]
+    elif to_code.get_type() == OperandTypes.Memory:
+        logger.debug("using SIB")
+        return SIB
     else:
         raise NotImplementedError()
 
 
 def get_reg(input: Input) -> Optional[str]:
     """Returns the REG value"""
+    to_code = None
     if get_d(input) == 0:
         to_code = input.second_operand
-        logger.debug(f"reg codes the {to_code}")
-        if to_code is None:
-            raise ValueError(f"No second operand for {to_code}")
-        if to_code.get_type() == OperandTypes.REGISTER:
-            return register_code_table_32[to_code.get_registers_used()[0]]
-        else:
-            raise NotImplementedError()
-    else:
+    elif get_d(input) == 1:
         to_code = input.first_operand
-        logger.debug(f"reg codes the {to_code}")
-        if to_code is None:
-            raise ValueError(f"No first operand {to_code}")
-        if to_code.get_type() == OperandTypes.REGISTER:
-            return register_code_table_32[to_code.get_registers_used()[0]]
-        else:
-            raise NotImplementedError()
+
+    if to_code is None:
+        raise ValueError(f"No second operand for {to_code}")
+
+    logger.debug(f"reg codes the {to_code}")
+
+    if to_code.get_type() == OperandTypes.REGISTER:
+        return register_code_table_32[to_code.get_registers_used()[0]]
+
+
+def get_scale(operand: Operand) -> Scale:
+    scale_specified = operand.get_scale()
+    if scale_specified is None:
+        return Scale.ONE
+    if scale_specified == 1:
+        return Scale.ONE
+    elif scale_specified == 2:
+        return Scale.TWO
+    elif scale_specified == 4:
+        return Scale.FOUR
+    elif scale_specified == 8:
+        return Scale.EIGHT
+    else:
+        raise RuntimeError("Cannot get scale")
+
+
+def get_index(operand: Operand) -> str:
+    index = operand.get_index()
+    logger.debug(f"index is {index}")
+    if index is None:
+        return "100"
+    logger.debug(f"index is register is {index}")
+    return register_code_table_32.get(index, "100")
+
+
+def get_base(operand: Operand) -> str:
+    base_specified = operand.get_base()
+    logger.debug(f"base is {base_specified}")
+    if base_specified is None:
+        base_specified = "ebp"
+    return register_code_table_32.get(base_specified, None)
+
+
+def get_sib(input: Input) -> Optional[str]:
+    to_code = None
+    if (
+        input.first_operand
+        and input.first_operand.get_type() == OperandTypes.Memory
+    ):
+        to_code = input.first_operand
+    elif (
+        input.second_operand
+        and input.second_operand.get_type() == OperandTypes.Memory
+    ):
+        to_code = input.second_operand
+    if to_code is None:
+        logger.debug("no SIB")
+        return None
+
+    logger.debug(f"sib codes the {to_code}")
+    scale = str(get_scale(to_code).value)
+    index = get_index(to_code)
+    base = get_base(to_code)
+    print(f"scale: {scale}, index: {index}, base: {base}")
+    return scale + index + base
 
 
 def reverse_byte_wise(binary: str) -> str:
     new_num = ""
-    for i in range(len(str(binary)), 0, -8):
-        new_num += str(binary)[i:]
-    new_num += binary[0:8]
+    for i in range(0, len(str(binary)), 8):
+        new_num = str(binary)[i : i + 8] + new_num
     return new_num
 
 
@@ -648,12 +769,71 @@ def get_data(input) -> Optional[str]:
         )
 
 
+def get_disp(input: Input) -> Optional[str]:
+    """Returns the displacement value"""
+    to_code = None
+    if input.first_operand and (
+        input.first_operand.get_addressing_mode()
+        in [
+            AddressingModes.REG_INDIRECT_ADDR_DISP,
+        ]
+        or (
+            input.first_operand.get_addressing_mode()
+            == AddressingModes.DIRECT_ADDR
+            and input.first_operand.get_disp() != None
+        )
+    ):
+        to_code = input.first_operand
+    elif input.second_operand and (
+        input.second_operand.get_addressing_mode()
+        in [
+            AddressingModes.REG_INDIRECT_ADDR_DISP,
+            AddressingModes.REG_INDIRECT_ADDR,
+        ]
+        or (
+            input.second_operand.get_addressing_mode()
+            == AddressingModes.DIRECT_ADDR
+            and input.second_operand.get_disp() != None
+        )
+    ):
+        to_code = input.second_operand
+
+    if to_code is None:
+        return None
+
+    disp_value = to_code.get_disp()
+    disp_size = None
+    if disp_value is None and to_code.get_base() is None:
+        logger.debug(f"base not specified default to ebp and 32 bit disp")
+        disp_size = 32
+        disp_value = 0
+    elif disp_value is None and to_code.get_base() == "ebp":
+        disp_size = 8
+        disp_value = 0
+
+    if disp_value is None:
+        return None
+
+    disp_size = len(bin(disp_value)) - 1
+    if disp_value is not None and to_code.get_base() is None:
+        # if we don't have base but we have disp it must be 32 bit
+        disp_size = 32
+    elif disp_value is not None and to_code.get_base() == "ebp":
+        if disp_size < 8:
+            disp_size = 8
+        else:
+            disp_size = 32
+
+    logger.debug(f"disp is {disp_value:0{disp_size}b}, size is {disp_size}")
+    return f"{disp_value:0{disp_size}b}"
+
+
 def get_code(asm_instruction: str):
     print("======================")
+    print(asm_instruction)
     input = parse_instruction(asm_instruction)
     print(input)
     op_code = get_opcode(input)
-    print(asm_instruction)
     result = ""
     prefix = get_prefix(input)
     print(f"prefix {prefix}")
@@ -676,8 +856,10 @@ def get_code(asm_instruction: str):
         result += str(w)
     print(f"w: {w}")
 
+    mod = None
     if not op_code.skip_mod:
         mod = get_mod(input)
+
         if mod is not None:
             print(f"mod: {mod.value}")
             result += str(mod.value)
@@ -687,11 +869,16 @@ def get_code(asm_instruction: str):
         result += reg
     print(f"reg: {reg}")
 
+    rm = None
     if not op_code.skip_rm:
         rm = get_rm(input)
         print(f"rm: {rm}")
         if rm is not None:
             result += rm
+
+    sib = get_sib(input)
+    if sib is not None:
+        result += sib
 
     data = get_data(input)
     if data is not None:
@@ -699,6 +886,14 @@ def get_code(asm_instruction: str):
         print(f"data: {formatted}")
         result += formatted
 
+    disp = get_disp(input)
+    if disp is not None:
+        print("disp raw: " + disp)
+        formatted = reverse_byte_wise(disp)
+        print(f"disp: {formatted}")
+        result += formatted
+
+    print(f"before hex: {result}")
     hex_value = hex(int("1" + result, 2))[3:]
     if prefix:
         hex_value = prefix + hex_value
@@ -708,7 +903,6 @@ def get_code(asm_instruction: str):
 
 
 # mov
-
 assert get_code("mov al,bh") == "88f8"
 
 assert get_code("mov dl,bl") == "88da"
@@ -723,6 +917,26 @@ assert (get_code("mov dx,0x1352")) == "66ba5213"
 
 assert (get_code("mov dx,0x3545")) == "66ba4535"
 
+assert get_code("mov edx,DWORD PTR [eax+ecx*1]") == "678b1408"
+
+assert get_code("mov edx,DWORD PTR [eax+ecx*1+0x55]") == "678b540855"
+
+assert get_code("mov edx,DWORD PTR [ecx*4]") == "678b148d00000000"
+
+assert get_code("mov edx,DWORD PTR [ecx*4+0x06]") == "678b148d06000000"
+
+assert get_code("mov edx,DWORD PTR [ebp+ecx*4]") == "678b548d00"
+
+assert get_code("mov edx,DWORD PTR [ebx+ecx*4]") == "678b148b"
+
+assert get_code("mov edx,DWORD PTR [ebp+ecx*4+0x06]") == "678b548d06"
+
+assert (
+    get_code("mov edx,DWORD PTR [ebp+ecx*4+0x55555506]") == "678b948d06555555"
+)
+
+assert get_code("mov edx,DWORD PTR [0x5555551E]") == "8b14251e555555"
+
 
 # add
 assert (get_code("add ecx,eax")) == "01c1"
@@ -730,3 +944,5 @@ assert (get_code("add ecx,eax")) == "01c1"
 assert get_code("add cx,ax") == "6601c1"
 
 assert get_code("adc dx,0x3545") == "6681d24535"
+
+assert get_code("add edi,DWORD PTR [ebx]") == "67033c23"
