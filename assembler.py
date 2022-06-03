@@ -180,7 +180,6 @@ rm_table_32_bit = {
 
 
 class MOD_16(Enum):
-    """Mod values for 16bits"""
 
     NO_DISP = "00"
     DISP8 = "01"
@@ -189,7 +188,6 @@ class MOD_16(Enum):
 
 
 class MOD_32(Enum):
-    """Mod values for 32bits"""
 
     NO_DISP = "00"
     SIB = "00"
@@ -199,7 +197,6 @@ class MOD_32(Enum):
 
 
 class Scale(Enum):
-    """Scale values"""
 
     ONE = "00"
     TWO = "01"
@@ -213,7 +210,8 @@ class AddressingModes(Enum):
     Examples:
     REG_ADDR: `mov ax, bx`
     IMM_ADDR: `mov ax, 0x1234`
-    DIRECT_ADDR: `mov ax, [0x1234]` or `mov ax, [ebx]`
+    DIRECT_ADDR: `mov ax, [0x1234]`
+    DIRECT_ADDR_REGISTER: `mov ax, [ebx]`
     REG_INDIRECT_ADDR: `mov ax, [bx+cx]`
     REG_INDIRECT_ADDR_DISP: `mov ax, [bx+cx+0x1234]`
     REG_INDIRECT_ADDR_DISP_SCALE: `mov ax, [bx+cx*8+18]`
@@ -223,8 +221,9 @@ class AddressingModes(Enum):
     REG_ADDR = 0
     IMM_ADDR = 1
     DIRECT_ADDR = 2
-    REG_INDIRECT_ADDR = 3
-    REG_INDIRECT_ADDR_DISP = 4
+    DIRECT_ADDR_REGISTER = 3
+    REG_INDIRECT_ADDR = 4
+    REG_INDIRECT_ADDR_DISP = 5
 
 
 class OperandTypes(Enum):
@@ -332,7 +331,9 @@ class Operand:
         if "PTR" in self._raw:
             address = self._get_address()
             logger.debug(address)
-            if is_register(address) or is_hex(address):
+            if is_register(address):
+                return AddressingModes.DIRECT_ADDR_REGISTER
+            elif is_hex(address):
                 return AddressingModes.DIRECT_ADDR
             elif not is_hex(address.split("+")[-1]) and "*" in address:
                 return AddressingModes.REG_INDIRECT_ADDR
@@ -353,8 +354,12 @@ class Operand:
             return get_register_size(self._raw)
 
         if self.get_type() == OperandTypes.Memory:
-            reg = self.get_registers_used()
-            if reg:
+            if self.get_addressing_mode() in [
+                AddressingModes.DIRECT_ADDR_REGISTER,
+                AddressingModes.REG_INDIRECT_ADDR,
+                AddressingModes.REG_INDIRECT_ADDR_DISP,
+            ]:
+                reg = self.get_registers_used()
                 return get_register_size(reg[0])
             if self.get_addressing_mode() == AddressingModes.DIRECT_ADDR:
                 if "BYTE" in self._raw:
@@ -375,9 +380,7 @@ class Operand:
             return None
         addr = self._get_address()
         addr_mode = self.get_addressing_mode()
-        if addr_mode == AddressingModes.DIRECT_ADDR:
-            if is_hex(addr):
-                return None
+        if addr_mode == AddressingModes.DIRECT_ADDR_REGISTER:
             return self.get_registers_used()[0]
         elif (
             addr_mode
@@ -618,6 +621,7 @@ def get_mod(input: Input) -> Optional[MOD_32]:
     if to_code.get_type() == OperandTypes.Memory:
         addr_mod = to_code.get_addressing_mode()
         if addr_mod in [
+            AddressingModes.DIRECT_ADDR_REGISTER,
             AddressingModes.DIRECT_ADDR,
         ]:
             return MOD_32.SIB
@@ -776,12 +780,9 @@ def get_disp(input: Input) -> Optional[str]:
         input.first_operand.get_addressing_mode()
         in [
             AddressingModes.REG_INDIRECT_ADDR_DISP,
+            AddressingModes.REG_INDIRECT_ADDR,
+            AddressingModes.DIRECT_ADDR,
         ]
-        or (
-            input.first_operand.get_addressing_mode()
-            == AddressingModes.DIRECT_ADDR
-            and input.first_operand.get_disp() != None
-        )
     ):
         to_code = input.first_operand
     elif input.second_operand and (
@@ -789,12 +790,8 @@ def get_disp(input: Input) -> Optional[str]:
         in [
             AddressingModes.REG_INDIRECT_ADDR_DISP,
             AddressingModes.REG_INDIRECT_ADDR,
+            AddressingModes.DIRECT_ADDR,
         ]
-        or (
-            input.second_operand.get_addressing_mode()
-            == AddressingModes.DIRECT_ADDR
-            and input.second_operand.get_disp() != None
-        )
     ):
         to_code = input.second_operand
 
