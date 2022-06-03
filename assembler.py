@@ -232,6 +232,7 @@ class OperandTypes(Enum):
     REGISTER = 0
     IMMEDIATE = 1
     Memory = 2
+    NOT_EXIST = 3
 
 
 @dataclass
@@ -535,19 +536,29 @@ def get_opcode(input: Input) -> OpCode:
 
     if operand_src:
         result = result.get(operand_src.get_type())
-
-    if not result:
-        raise ValueError(
-            f"Operation {operation} with source operand type {operand_src.get_type()} not found"
-        )
+        if not result:
+            raise ValueError(
+                f"Operation {operation} with source operand type {operand_src.get_type()} not found"
+            )
+    else:
+        result = result.get(OperandTypes.NOT_EXIST)
+        if not result:
+            raise ValueError(
+                f"Operation {operation} without operands not found"
+            )
 
     if operand_dest:
         result = result.get(operand_dest.get_type())
-
-    if not result:
-        raise ValueError(
-            f"Operation {operation} with first operand type {operand_src} and second operand type {operand_dest} not found"
-        )
+        if not result:
+            raise ValueError(
+                f"Operation {operation} with first operand type {operand_src} and second operand type {operand_dest} not found"
+            )
+    else:
+        result = result.get(OperandTypes.NOT_EXIST)
+        if not result:
+            raise ValueError(
+                f"Operation {operation} with single first operand type {operand_src}"
+            )
 
     return result
 
@@ -598,11 +609,6 @@ def get_code_w(input: Input):
         return 1
 
 
-def calculate_disp_size(operand: Operand) -> int:
-    disp_size = len(bin(operand.get_disp())) - 1
-    return disp_size
-
-
 def get_mod(input: Input) -> Optional[MOD_32]:
     """Returns the MOD/RM value"""
     op_code = get_opcode(input)
@@ -635,7 +641,7 @@ def get_mod(input: Input) -> Optional[MOD_32]:
                     f"operand has displacement but base is {to_code.get_base()} so use SIB for mod"
                 )
                 return MOD_32.SIB
-            disp_size = calculate_disp_size(to_code)
+            disp_size = len(bin(to_code.get_disp())) - 1
             if disp_size <= 8:
                 return MOD_32.DISP8
             elif disp_size <= 32:
@@ -727,7 +733,7 @@ def get_base(operand: Operand) -> str:
     logger.debug(f"base is {base_specified}")
     if base_specified is None:
         base_specified = "ebp"
-    return register_code_table_32.get(base_specified, None)
+    return register_code_table_32[base_specified]
 
 
 def get_sib(input: Input) -> Optional[str]:
