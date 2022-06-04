@@ -18,6 +18,14 @@ REGISTER_8_BIT = {
     "bh",
     "ch",
     "dh",
+    "r8b",
+    "r9b",
+    "r10b",
+    "r11b",
+    "r12b",
+    "r13b",
+    "r14b",
+    "r15b",
 }
 
 REGISTER_16_BIT = {
@@ -35,6 +43,8 @@ REGISTER_16_BIT = {
     "r11w",
     "r12w",
     "r13w",
+    "r14w",
+    "r15w",
 }
 
 REGISTER_32_BIT = {
@@ -52,6 +62,8 @@ REGISTER_32_BIT = {
     "r11d",
     "r12d",
     "r13d",
+    "r14d",
+    "r15d",
 }
 
 REGISTER_64_BIT = {
@@ -69,6 +81,8 @@ REGISTER_64_BIT = {
     "r11",
     "r12",
     "r13",
+    "r14",
+    "r15",
 }
 
 
@@ -111,14 +125,82 @@ address_prefix_table = {
 }
 
 operand_prefix_table = {
-    # (operand, address)
     64: False,
     32: False,
     16: True,
     8: False,
 }
 
-register_table_64 = {}
+register_table_64 = {
+    "al": "0000",
+    "cl": "0001",
+    "dl": "0010",
+    "bl": "0011",
+    "ah": "0100",
+    "ch": "0101",
+    "dh": "0110",
+    "bh": "0111",
+    "r8b": "1000",
+    "r9b": "1001",
+    "r10b": "1010",
+    "r11b": "1011",
+    "r12b": "1100",
+    "r13b": "1101",
+    "r14b": "1110",
+    "r15b": "1111",
+    # 16 bit
+    "ax": "0000",
+    "cx": "0001",
+    "dx": "0010",
+    "bx": "0011",
+    "sp": "0100",
+    "bp": "0101",
+    "si": "0110",
+    "di": "0111",
+    "r8w": "1000",
+    "r9w": "1001",
+    "r10w": "1010",
+    "r11w": "1011",
+    "r12w": "1100",
+    "r13w": "1101",
+    "r14w": "1110",
+    "r15w": "1111",
+    # 32 bit
+    "eax": "0000",
+    "ecx": "0001",
+    "edx": "0010",
+    "ebx": "0011",
+    "esp": "0100",
+    "ebp": "0101",
+    "esi": "0110",
+    "edi": "0111",
+    "r8d": "1000",
+    "r9d": "1001",
+    "r10d": "1010",
+    "r11d": "1011",
+    "r12d": "1100",
+    "r13d": "1101",
+    "r14d": "1110",
+    "r15d": "1111",
+    # 64 bit
+    "rax": "0000",
+    "rcx": "0001",
+    "rdx": "0010",
+    "rbx": "0011",
+    "rsp": "0100",
+    "rbp": "0101",
+    "rsi": "0110",
+    "rdi": "0111",
+    "r8": "1000",
+    "r9": "001",
+    "r10": "1010",
+    "r11": "1011",
+    "r12": "1100",
+    "r13": "1101",
+    "r14": "1110",
+    "r15": "1111",
+}
+
 register_code_table_32 = {
     # 8 bit
     "al": "000",
@@ -240,6 +322,7 @@ class OpCode:
     """OpCode class"""
 
     opcode: str
+    w: Optional[int] = None
     skip_d: bool = False
     d: Optional[int] = None
     skip_s: bool = True
@@ -294,6 +377,29 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
             ),
         }
     },
+    "test": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="100001",
+                d=0,
+            ),
+            OperandTypes.Memory: OpCode(
+                opcode="100001",
+                d=0,
+            ),
+            OperandTypes.IMMEDIATE: OpCode(opcode="111101", d=1),
+        }
+    },
+    "imul": {
+        OperandTypes.Memory: {
+            OperandTypes.REGISTER: OpCode(opcode="00001111101011", d=1, w=1),
+        }
+    },
+    "xor": {
+        OperandTypes.Memory: {
+            OperandTypes.REGISTER: OpCode(opcode="001100"),
+        }
+    },
 }
 
 
@@ -331,7 +437,6 @@ class Operand:
     def get_addressing_mode(self) -> AddressingModes:
         if "PTR" in self._raw:
             address = self._get_address()
-            logger.debug(address)
             if is_register(address):
                 return AddressingModes.DIRECT_ADDR_REGISTER
             elif is_hex(address):
@@ -496,6 +601,20 @@ def parse_instruction(instruction: str) -> Input:
     return Input(operation, Operand(first_operand), Operand(second_operand))
 
 
+def operand_require_rex(operand: Operand) -> bool:
+    """Checks if the operand requires the rex prefix"""
+    if operand.get_type() == OperandTypes.REGISTER:
+        if operand.get_size() == 64 or operand.get_registers_used()[
+            0
+        ].startswith("r"):
+            return True
+    elif operand.get_type() == OperandTypes.Memory:
+        for reg in operand.get_registers_used():
+            if get_register_size(reg) == 64 or reg.startswith("r"):
+                return True
+    return False
+
+
 def get_prefix(input: Input) -> Optional[str]:
     dest = input.second_operand
     src = input.first_operand
@@ -563,6 +682,22 @@ def get_opcode(input: Input) -> OpCode:
     return result
 
 
+def get_d(input: Input) -> Optional[int]:
+    """d is 1 if first operand is register"""
+    if get_opcode(input).d is not None:
+        return get_opcode(input).d
+    elif (
+        input.second_operand
+        and input.second_operand.get_type() == OperandTypes.REGISTER
+    ):
+        return 0
+    elif (
+        input.first_operand
+        and input.first_operand.get_type() == OperandTypes.REGISTER
+    ):
+        return 1
+
+
 def get_s(input: Input) -> Optional[int]:
     """Returns the s bit"""
     if not input.second_operand or not input.first_operand:
@@ -576,22 +711,6 @@ def get_s(input: Input) -> Optional[int]:
         return 1
 
     return 0
-
-
-def get_d(input: Input) -> Optional[int]:
-    """if d is 1, the first operand is a register"""
-    if get_opcode(input).d is not None:
-        return get_opcode(input).d
-    elif (
-        input.second_operand
-        and input.second_operand.get_type() == OperandTypes.REGISTER
-    ):
-        return 0
-    elif (
-        input.first_operand
-        and input.first_operand.get_type() == OperandTypes.REGISTER
-    ):
-        return 1
 
 
 def get_code_w(input: Input):
@@ -627,15 +746,15 @@ def get_mod(input: Input) -> Optional[MOD_32]:
     if to_code.get_type() == OperandTypes.Memory:
         addr_mod = to_code.get_addressing_mode()
         if addr_mod in [
-            AddressingModes.DIRECT_ADDR_REGISTER,
             AddressingModes.DIRECT_ADDR,
         ]:
             return MOD_32.SIB
-        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR:
-            if to_code.get_base() == "ebp":
+        elif addr_mod == AddressingModes.DIRECT_ADDR_REGISTER:
+            print(to_code.get_registers_used())
+            if to_code.get_registers_used()[0].endswith("bp"):
                 return MOD_32.DISP8
             return MOD_32.SIB
-        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR_DISP:
+        elif addr_mod in [AddressingModes.REG_INDIRECT_ADDR_DISP]:
             if to_code.get_base() is None:
                 logger.debug(
                     f"operand has displacement but base is {to_code.get_base()} so use SIB for mod"
@@ -648,6 +767,12 @@ def get_mod(input: Input) -> Optional[MOD_32]:
                 return MOD_32.DISP32
             else:
                 raise RuntimeError(f"Unknown displacement size: {disp_size}")
+        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR:
+            if to_code.get_base() is None:
+                return MOD_32.SIB
+            if to_code.get_base().endswith("bp"):
+                return MOD_32.DISP8
+            return MOD_32.SIB
 
     elif to_code.get_type() == OperandTypes.REGISTER:
         return MOD_32.REG_ADDR
@@ -655,11 +780,7 @@ def get_mod(input: Input) -> Optional[MOD_32]:
         raise NotImplementedError(f"Unknown operand type: {to_code}")
 
 
-def get_rm(input: Input):
-    """Returns the RM value"""
-    SIB = "100"
-    if input.second_operand is None:
-        return None
+def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
     to_code = None
     if get_d(input) == 0:
         # rm codes the destination
@@ -667,56 +788,79 @@ def get_rm(input: Input):
     elif get_d(input) == 1:
         # rm codes the source
         to_code = input.second_operand
+
     op_code = get_opcode(input)
     if op_code.rm_codes == 1:
         to_code = input.first_operand
     elif op_code.rm_codes == 2:
         to_code = input.second_operand
+    return to_code
+
+
+def get_rm(input: Input):
+    """Returns the RM value"""
+    SIB = "100"
+    to_code = select_operand_to_code_with_rm(input)
+    if input.second_operand is None:
+        return None
 
     if to_code is None:
         raise RuntimeError
     logger.debug(f"rm codes the {to_code}")
 
     if to_code.get_type() == OperandTypes.REGISTER:
+        if operand_require_rex(to_code):
+            return register_table_64[to_code.get_registers_used()[0]][1:]
         return rm_table_32_bit[to_code.get_registers_used()[0]]
     elif to_code.get_type() == OperandTypes.Memory:
+        if (
+            operand_require_rex(to_code)
+            and to_code.get_addressing_mode()
+            == AddressingModes.DIRECT_ADDR_REGISTER
+        ):
+            return register_table_64[to_code.get_registers_used()[0]][1:]
         logger.debug("using SIB")
         return SIB
+    elif to_code.get_type() == OperandTypes.IMMEDIATE:
+        return
     else:
         raise NotImplementedError()
 
 
+def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
+    if get_d(input) == 0:
+        return input.second_operand
+    elif get_d(input) == 1:
+        return input.first_operand
+
+
 def get_reg(input: Input) -> Optional[str]:
     """Returns the REG value"""
-    to_code = None
-    if get_d(input) == 0:
-        to_code = input.second_operand
-    elif get_d(input) == 1:
-        to_code = input.first_operand
-
+    to_code = select_operand_to_code_with_reg(input)
     if to_code is None:
         raise ValueError(f"No second operand for {to_code}")
 
     logger.debug(f"reg codes the {to_code}")
 
-    if to_code.get_type() == OperandTypes.REGISTER:
-        return register_code_table_32[to_code.get_registers_used()[0]]
+    if not to_code.get_type() == OperandTypes.REGISTER:
+        raise ValueError(f"{to_code} is not a register")
+    if operand_require_rex(to_code):
+        # The first character of this code is encoded in the REX prefix
+        return register_table_64[to_code.get_registers_used()[0]][1:]
+
+    return register_code_table_32[to_code.get_registers_used()[0]]
 
 
 def get_scale(operand: Operand) -> Scale:
     scale_specified = operand.get_scale()
     if scale_specified is None:
         return Scale.ONE
-    if scale_specified == 1:
-        return Scale.ONE
-    elif scale_specified == 2:
-        return Scale.TWO
-    elif scale_specified == 4:
-        return Scale.FOUR
-    elif scale_specified == 8:
-        return Scale.EIGHT
-    else:
-        raise RuntimeError("Cannot get scale")
+    return {
+        1: Scale.ONE,
+        2: Scale.TWO,
+        4: Scale.FOUR,
+        8: Scale.EIGHT,
+    }[scale_specified]
 
 
 def get_index(operand: Operand) -> str:
@@ -736,7 +880,13 @@ def get_base(operand: Operand) -> str:
     return register_code_table_32[base_specified]
 
 
+def has_sib(input: Input) -> bool:
+    return get_rm(input) == "100"
+
+
 def get_sib(input: Input) -> Optional[str]:
+    if not has_sib(input):
+        return None
     to_code = None
     if (
         input.first_operand
@@ -781,27 +931,22 @@ def get_data(input) -> Optional[str]:
 
 def get_disp(input: Input) -> Optional[str]:
     """Returns the displacement value"""
-    to_code = None
-    if input.first_operand and (
-        input.first_operand.get_addressing_mode()
-        in [
-            AddressingModes.REG_INDIRECT_ADDR_DISP,
-            AddressingModes.REG_INDIRECT_ADDR,
-            AddressingModes.DIRECT_ADDR,
-        ]
-    ):
-        to_code = input.first_operand
-    elif input.second_operand and (
-        input.second_operand.get_addressing_mode()
-        in [
-            AddressingModes.REG_INDIRECT_ADDR_DISP,
-            AddressingModes.REG_INDIRECT_ADDR,
-            AddressingModes.DIRECT_ADDR,
-        ]
-    ):
-        to_code = input.second_operand
-
+    to_code = select_operand_to_code_with_rm(input)
     if to_code is None:
+        return None
+
+    has_disp = False
+    if to_code.get_addressing_mode() in [
+        AddressingModes.REG_INDIRECT_ADDR_DISP,
+        AddressingModes.REG_INDIRECT_ADDR,
+        AddressingModes.DIRECT_ADDR,
+    ]:
+        has_disp = True
+    if to_code.get_addressing_mode() == AddressingModes.DIRECT_ADDR_REGISTER:
+        if to_code.get_registers_used()[0].endswith("bp"):
+            has_disp = True
+
+    if not has_disp:
         return None
 
     disp_value = to_code.get_disp()
@@ -810,25 +955,98 @@ def get_disp(input: Input) -> Optional[str]:
         logger.debug(f"base not specified default to ebp and 32 bit disp")
         disp_size = 32
         disp_value = 0
-    elif disp_value is None and to_code.get_base() == "ebp":
+        return f"{disp_value:0{disp_size}b}"
+    elif disp_value is None and to_code.get_base() in ["rbp", "ebp", "bp"]:
         disp_size = 8
         disp_value = 0
+        return f"{disp_value:0{disp_size}b}"
 
     if disp_value is None:
         return None
 
+    logger.debug("has disp")
+
     disp_size = len(bin(disp_value)) - 1
-    if disp_value is not None and to_code.get_base() is None:
+    if to_code.get_base() is None:
         # if we don't have base but we have disp it must be 32 bit
         disp_size = 32
-    elif disp_value is not None and to_code.get_base() == "ebp":
+        return f"{disp_value:0{disp_size}b}"
+    elif to_code.get_base() == "ebp":
         if disp_size < 8:
             disp_size = 8
         else:
             disp_size = 32
+        return f"{disp_value:0{disp_size}b}"
+    else:
+        return f"{disp_value:0{disp_size}b}"
 
-    logger.debug(f"disp is {disp_value:0{disp_size}b}, size is {disp_size}")
-    return f"{disp_value:0{disp_size}b}"
+
+def get_r(input: Input) -> str:
+    coded_with_reg = select_operand_to_code_with_reg(input)
+    if coded_with_reg is None:
+        raise ValueError(f"No second operand for {coded_with_reg}")
+    return register_table_64[coded_with_reg.get_registers_used()[0]][0]
+
+
+def get_w(input: Input) -> int:
+    for operand in [input.first_operand, input.second_operand]:
+        if not operand:
+            continue
+        size = operand.get_size()
+        if size in [8, 16, 32]:
+            return 0
+        else:
+            return 1
+    raise NotImplementedError("No operand specified")
+
+
+def get_b(input: Input) -> str:
+    mod = get_mod(input)
+    op = select_operand_to_code_with_rm(input)
+    if op is None:
+        return ""
+
+    if (
+        mod == MOD_32.REG_ADDR
+        or op.get_addressing_mode() == AddressingModes.DIRECT_ADDR_REGISTER
+    ):
+        return register_table_64[op.get_registers_used()[0]][0]
+    if mod == MOD_32.NO_DISP:
+        return register_table_64[op.get_registers_used()[0]][0]
+
+    # if mod/rm are sib then b extends the base
+    raise NotImplementedError()
+
+
+def get_x(input: Input) -> str:
+    if has_sib(input):
+        return "1"
+    else:
+        return "0"
+
+
+def get_rex(input: Input) -> Optional[str]:
+    # We only have rex if 64 bit operands or 32 bit operands starting with r are used
+    need_rex = False
+    to_code = None
+    for operand in [input.first_operand, input.second_operand]:
+        if operand is None:
+            continue
+        if operand_require_rex(operand):
+            need_rex = True
+            to_code = operand
+
+    if not need_rex or not to_code:
+        return None
+
+    r = get_r(input)
+    w = get_w(input)
+    b = get_b(input)
+    x = get_x(input)
+
+    print(f"r: {r}, w: {w}, b: {b}, x: {x}")
+
+    return "0100" + str(w) + r + x + b
 
 
 def get_code(asm_instruction: str):
@@ -838,8 +1056,14 @@ def get_code(asm_instruction: str):
     print(input)
     op_code = get_opcode(input)
     result = ""
+
     prefix = get_prefix(input)
     print(f"prefix {prefix}")
+
+    rex = get_rex(input)
+    print(f"rex {rex}")
+    if rex:
+        result += rex
 
     result += op_code.opcode
     print(f"op: {op_code.opcode}")
@@ -949,3 +1173,13 @@ assert get_code("add cx,ax") == "6601c1"
 assert get_code("adc dx,0x3545") == "6681d24535"
 
 assert get_code("add edi,DWORD PTR [ebx]") == "67033c23"
+
+
+# test
+assert get_code("test r8d,edx") == "4185d0"
+
+# imul
+assert get_code("imul r8w,WORD PTR [r14]") == "66450faf06"
+
+# xor
+assert get_code("xor r8b,BYTE PTR [rbp]") == "44324500"
