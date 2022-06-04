@@ -343,6 +343,7 @@ class OpCode:
     skip_d: bool = False
     d: Optional[int] = None
     skip_s: bool = True
+    flip_d: bool = False
 
     reg: Optional[str] = None
     skip_reg: bool = False
@@ -409,7 +410,7 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
     },
     "imul": {
         OperandTypes.Memory: {
-            OperandTypes.REGISTER: OpCode(opcode="00001111101011", d=1, w=1),
+            OperandTypes.REGISTER: OpCode(opcode="00001111101011", d=1),
         }
     },
     "xor": {
@@ -424,7 +425,9 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
     },
     "bsf": {
         OperandTypes.Memory: {
-            OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=0),
+            OperandTypes.REGISTER: OpCode(
+                opcode="00001111101111", d=0, w=0, flip_d=True
+            ),
         }
     },
 }
@@ -773,6 +776,9 @@ def get_s(input: Input) -> Optional[int]:
 
 def get_code_w(input: Input):
     """Returns the W value"""
+    opcode = get_opcode(input)
+    if opcode.w is not None:
+        return opcode.w
     if input.first_operand is None:
         return 1
     if input.second_operand is None:
@@ -791,9 +797,12 @@ def get_mod(input: Input) -> Optional[MOD_32]:
         return op_code.mod
 
     to_code = None
-    if get_d(input) == 0:
+    d = get_d(input)
+    if op_code.flip_d:
+        d = int(not d)
+    if d == 0:
         to_code = input.first_operand
-    elif get_d(input) == 1:
+    elif d == 1:
         to_code = input.second_operand
 
     if to_code is None:
@@ -833,10 +842,15 @@ def get_mod(input: Input) -> Optional[MOD_32]:
 
 def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
     to_code = None
-    if get_d(input) == 0:
+    op_code = get_opcode(input)
+    d = get_d(input)
+    if op_code.flip_d:
+        d = int(not d)
+
+    if d == 0:
         # rm codes the destination
         to_code = input.first_operand
-    elif get_d(input) == 1:
+    elif d == 1:
         # rm codes the source
         to_code = input.second_operand
 
@@ -862,10 +876,10 @@ def get_rm(input: Input):
             return register_table_64[to_code.get_registers_used()[0]][1:]
         return rm_table_32_bit[to_code.get_registers_used()[0]]
     elif to_code.get_type() == OperandTypes.Memory:
-        if (
-            to_code.get_addressing_mode()
-            == AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP
-        ):
+        if to_code.get_addressing_mode() in [
+            AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP,
+            AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP,
+        ]:
             return SIB
         if operand_require_rex(to_code):
             return register_table_64[to_code.get_registers_used()[0]][1:]
@@ -878,9 +892,14 @@ def get_rm(input: Input):
 
 
 def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
-    if get_d(input) == 0:
+    op_code = get_opcode(input)
+    d = get_d(input)
+    if op_code.flip_d:
+        d = int(not d)
+
+    if d == 0:
         return input.second_operand
-    elif get_d(input) == 1:
+    elif d == 1:
         return input.first_operand
 
 
@@ -1040,7 +1059,7 @@ def get_r(input: Input) -> str:
     return register_table_64[coded_with_reg.get_registers_used()[0]][0]
 
 
-def get_w(input: Input) -> int:
+def get_rex_w(input: Input) -> int:
     for operand in [input.first_operand, input.second_operand]:
         if not operand:
             continue
@@ -1103,7 +1122,7 @@ def get_rex(input: Input) -> Optional[str]:
         return None
 
     r = get_r(input)
-    w = get_w(input)
+    w = get_rex_w(input)
     b = get_b(input)
     x = get_x(input)
 
