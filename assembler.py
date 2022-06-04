@@ -261,6 +261,37 @@ rm_table_32_bit = {
     "edi": "111",
 }
 
+tttn_table = {
+    "O": "0000",
+    "NO": "0001",
+    "B": "0010",
+    "NAE": "0010",
+    "NB": "0011",
+    "AE": "0011",
+    "E": "0100",
+    "Z": "0100",
+    "NE": "0101",
+    "NZ": "0101",
+    "BE": "0110",
+    "NA": "0110",
+    "A": "0111",
+    "NBE": "0111",
+    "S": "1000",
+    "NS": "1001",
+    "P": "1010",
+    "PE": "1010",
+    "NP": "1011",
+    "PO": "1011",
+    "L": "1100",
+    "NGE": "1100",
+    "NL": "1101",
+    "GE": "1101",
+    "LE": "1110",
+    "NG": "1110",
+    "G": "1111",
+    "NLE": "1111",
+}
+
 
 class MOD_16(Enum):
 
@@ -460,6 +491,22 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 mod=MOD_32.REG_ADDR,
                 rm_codes=1,
                 d=1,
+            )
+        },
+        OperandTypes.Memory: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111111",
+                reg="100",
+                rm_codes=1,
+                d=1,
+            )
+        },
+    },
+    "cmp": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="001110",
+                d=0,
             )
         }
     },
@@ -926,12 +973,12 @@ def get_rm(input: Input):
             AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP,
             AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP,
             AddressingModes.REG_INDIRECT_ADDR_INDEX,
+            AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX,
+            AddressingModes.DIRECT_ADDR_VALUE,
         ]:
             return SIB
-        if operand_require_rex(to_code):
-            return register_table_64[to_code.get_registers_used()[0]][1:]
 
-        return SIB
+        return register_table_64[to_code.get_registers_used()[0]][1:]
     elif to_code.get_type() == OperandTypes.IMMEDIATE:
         return None
     else:
@@ -1308,7 +1355,7 @@ assert get_code("add cx,ax") == "6601c1"
 
 assert get_code("adc dx,0x3545") == "6681d24535"
 
-assert get_code("add edi,DWORD PTR [ebx]") == "67033c23"
+assert get_code("add edi,DWORD PTR [ebx]") == "67033b"
 
 
 # test
@@ -1333,3 +1380,11 @@ assert get_code("idiv QWORD PTR [r11*4]") == "4af73c9d00000000"
 
 # jmp
 assert get_code("jmp r8") == "41ffe0"
+
+assert get_code("jmp QWORD PTR [r8]") == "41ff20"
+
+
+# assert get_code("jo hello") == "0f8000000000"
+
+# cmp
+# assert get_code("cmp r8, rdx") == "4939d0"
