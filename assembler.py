@@ -4,7 +4,7 @@ import pdb
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 ValidationErr = RuntimeError
 
@@ -193,7 +193,7 @@ register_table_64 = {
     "rsi": "0110",
     "rdi": "0111",
     "r8": "1000",
-    "r9": "001",
+    "r9": "1001",
     "r10": "1010",
     "r11": "1011",
     "r12": "1100",
@@ -361,7 +361,7 @@ class OperandTypes(Enum):
 
     REGISTER = 0
     IMMEDIATE = 1
-    Memory = 2
+    MEMORY = 2
     NOT_EXIST = 3
 
 
@@ -398,9 +398,14 @@ class OpCode:
     source_operand_number: Optional[int] = None
     dest_operand_number: Optional[int] = None
 
+    r: Optional[int] = None
+    x: Optional[int] = None
+
 
 # Operation: Source: Destination
-opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
+opcode_table: Dict[
+    str, Dict[Union[OperandTypes, str], Dict[Union[OperandTypes, str], OpCode]]
+] = {
     "mov": {
         OperandTypes.REGISTER: {
             OperandTypes.REGISTER: OpCode(
@@ -413,7 +418,7 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 opcode="1011", skip_d=True, skip_mod=True, skip_rm=True
             ),
         },
-        OperandTypes.Memory: {OperandTypes.REGISTER: OpCode(opcode="100010")},
+        OperandTypes.MEMORY: {OperandTypes.REGISTER: OpCode(opcode="100010")},
     },
     "add": {
         OperandTypes.REGISTER: {
@@ -423,7 +428,7 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 mod=MOD_32.REG_ADDR,
             )
         },
-        OperandTypes.Memory: {
+        OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(opcode="000000", d=1)
         },
     },
@@ -445,37 +450,53 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 opcode="100001",
                 d=0,
             ),
-            OperandTypes.Memory: OpCode(
+            OperandTypes.MEMORY: OpCode(
                 opcode="100001",
                 d=0,
             ),
             OperandTypes.IMMEDIATE: OpCode(opcode="111101", d=1),
-        }
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(opcode="100001", d=0, flip_d=True),
+        },
     },
     "imul": {
-        OperandTypes.Memory: {
+        OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(opcode="00001111101011", d=1),
         }
     },
     "xor": {
-        OperandTypes.Memory: {
+        OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(opcode="001100"),
         }
     },
     "xadd": {
         OperandTypes.REGISTER: {
-            OperandTypes.Memory: OpCode(opcode="00001111110000"),
+            OperandTypes.MEMORY: OpCode(opcode="00001111110000"),
         }
     },
     "bsf": {
-        OperandTypes.Memory: {
+        OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(
                 opcode="00001111101111", d=0, w=0, flip_d=True
             ),
         }
     },
+    "bsr": {
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="00001111101111", d=0, w=1, flip_d=True
+            ),
+        },
+        # OperandTypes.REGISTER: {
+        #     OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=1),
+        #     OperandTypes.Memory: OpCode(
+        #         opcode="00001111101111", d=0, w=1, flip_d=True
+        #     ),
+        # },
+    },
     "idiv": {
-        OperandTypes.Memory: {
+        OperandTypes.MEMORY: {
             OperandTypes.NOT_EXIST: OpCode(
                 opcode="111101",
                 source_operand_number=1,
@@ -491,14 +512,13 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
                 mod=MOD_32.REG_ADDR,
                 rm_codes=1,
                 d=1,
+                r=0,
+                x=0,
             )
         },
-        OperandTypes.Memory: {
+        OperandTypes.MEMORY: {
             OperandTypes.NOT_EXIST: OpCode(
-                opcode="111111",
-                reg="100",
-                rm_codes=1,
-                d=1,
+                opcode="111111", reg="100", rm_codes=1, d=1, r=0
             )
         },
     },
@@ -507,6 +527,66 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
             OperandTypes.REGISTER: OpCode(
                 opcode="001110",
                 d=0,
+            )
+        }
+    },
+    "xchg": {
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(opcode="100001", d=1),
+        },
+        OperandTypes.REGISTER: {
+            OperandTypes.MEMORY: OpCode(opcode="100001", d=1, flip_d=True),
+        },
+    },
+    "sub": {
+        OperandTypes.REGISTER: {
+            OperandTypes.MEMORY: OpCode(opcode="001010"),
+        }
+    },
+    "sbb": {
+        OperandTypes.REGISTER: {
+            OperandTypes.MEMORY: OpCode(opcode="000110"),
+        }
+    },
+    "inc": {
+        OperandTypes.REGISTER: {
+            OperandTypes.NOT_EXIST: OpCode(opcode="111111", d=1, reg="000")
+        }
+    },
+    "dec": {
+        OperandTypes.MEMORY: {
+            OperandTypes.NOT_EXIST: OpCode(opcode="111111", d=1, reg="001")
+        },
+        OperandTypes.REGISTER: {
+            OperandTypes.NOT_EXIST: OpCode(opcode="111111", d=1, reg="001")
+        },
+    },
+    "shl": {
+        OperandTypes.IMMEDIATE: {
+            OperandTypes.MEMORY: OpCode(opcode="110000", reg="100", d=0)
+        },
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.MEMORY: OpCode(opcode="110100", reg="100", d=0)
+        },
+    },
+    "shr": {
+        "cl": {
+            OperandTypes.MEMORY: OpCode(
+                opcode="110100", reg="101", d=1, flip_d=True
+            )
+        }
+    },
+    "neg": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="111101", d=1, reg="011", flip_d=True
+            )
+        }
+    },
+    "not": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.MEMORY: OpCode(
+                opcode="111101", d=1, reg="010", flip_d=True
             )
         }
     },
@@ -524,7 +604,7 @@ class Operand:
         elif self._raw.startswith("0x"):
             return OperandTypes.IMMEDIATE
         elif "PTR" in self._raw:
-            return OperandTypes.Memory
+            return OperandTypes.MEMORY
         else:
             raise NotImplementedError(f"Unknown operand type: {self._raw}")
 
@@ -598,7 +678,7 @@ class Operand:
         if self.get_type() == OperandTypes.REGISTER:
             return get_register_size(self._raw)
 
-        if self.get_type() == OperandTypes.Memory:
+        if self.get_type() == OperandTypes.MEMORY:
             reg = self.get_registers_used()
             if reg:
                 return get_register_size(reg[0])
@@ -607,16 +687,47 @@ class Operand:
             if self.get_addressing_mode() == AddressingModes.DIRECT_ADDR_VALUE:
                 if "BYTE" in self._raw:
                     return 8
-                elif "WORD" in self._raw:
-                    return 16
-                elif "DWORD" in self._raw:
-                    return 32
                 elif "QWORD" in self._raw:
                     return 64
-
+                elif "DWORD" in self._raw:
+                    return 32
+                elif "WORD" in self._raw:
+                    return 16
+        if self.get_type() == OperandTypes.IMMEDIATE:
+            size = len(bin(int(self._raw, 16)))
+            if size < 16:
+                return 16
+            elif size <= 32:
+                return 32
+            else:
+                return 64
         raise RuntimeError(
             f"cannot get address size for this operand {self._raw}"
         )
+
+    def get_operand_size(self) -> int:
+        if self.get_type() == OperandTypes.REGISTER:
+            return get_register_size(self._raw)
+
+        if self.get_type() == OperandTypes.MEMORY:
+            if "BYTE" in self._raw:
+                return 8
+            elif "QWORD" in self._raw:
+                return 64
+            elif "DWORD" in self._raw:
+                return 32
+            elif "WORD" in self._raw:
+                return 16
+        if self.get_type() == OperandTypes.IMMEDIATE:
+            size = len(bin(int(self._raw, 16)))
+            print(size)
+            if size < 16:
+                return 16
+            elif size <= 32:
+                return 32
+            else:
+                return 64
+        raise NotImplementedError(f"Unknown operand type {self._raw}")
 
     def get_base(self) -> Optional[str]:
         if self.get_addressing_mode() not in [
@@ -680,12 +791,12 @@ class Input:
         if self.first_operand is None:
             raise ValueError(f"No operands for {self.operation}")
         if self.first_operand.get_type() in [
-            OperandTypes.Memory,
+            OperandTypes.MEMORY,
             OperandTypes.REGISTER,
         ]:
             return self.first_operand.get_size()
         elif self.second_operand and self.second_operand.get_type() in [
-            OperandTypes.Memory,
+            OperandTypes.MEMORY,
             OperandTypes.REGISTER,
         ]:
             return self.second_operand.get_size()
@@ -733,11 +844,11 @@ def parse_instruction(instruction: str) -> Input:
     while cursor < len(instruction) and instruction[cursor] != ",":
         cursor += 1
 
-    first_operand = instruction[len(operation) + 1 : cursor]
+    first_operand = instruction[len(operation) + 1 : cursor].strip()
     logger.debug(f"first operand is: {first_operand}")
 
     if cursor + 1 < len(instruction):
-        second_operand = instruction[cursor + 1 :]
+        second_operand = instruction[cursor + 1 :].strip()
         second_operand = Operand(second_operand)
     else:
         second_operand = None
@@ -753,10 +864,12 @@ def operand_require_rex(operand: Operand) -> bool:
             0
         ].startswith("r"):
             return True
-    elif operand.get_type() == OperandTypes.Memory:
+    elif operand.get_type() == OperandTypes.MEMORY:
         for reg in operand.get_registers_used():
             if get_register_size(reg) == 64 or reg.startswith("r"):
                 return True
+        if operand.get_size() == 64:
+            return True
     return False
 
 
@@ -769,21 +882,31 @@ def get_prefix(input: Input) -> Optional[str]:
     for operand in [dest, src]:
         if operand is None:
             continue
-        if operand.get_type() == OperandTypes.IMMEDIATE:
-            continue
-        size = operand.get_size()
-        if operand.get_type() == OperandTypes.Memory:
+        if operand.get_type() in [
+            OperandTypes.IMMEDIATE,
+            OperandTypes.REGISTER,
+        ]:
+            size = operand.get_size()
+        elif operand.get_type() == OperandTypes.MEMORY:
             address = operand.get_size()
-            logger.debug(f"operand {operand} size is {address}")
+            if (
+                operand.get_addressing_mode()
+                == AddressingModes.DIRECT_ADDR_VALUE
+            ):
+                address = 64
 
-    prefix1 = operand_prefix_table[size]
+    logger.debug(
+        f"operand address size is {address} and operand size is {size}"
+    )
+
+    prefix1 = operand_prefix_table.get(size, False)
     prefix2 = address_prefix_table.get(address, False)
 
     prefix = ""
     if prefix1 is True:
-        prefix += str(SIZE_PREFIX)
+        prefix = str(SIZE_PREFIX) + prefix
     if prefix2 is True:
-        prefix += str(ADDRESS_PREFIX)
+        prefix = str(ADDRESS_PREFIX) + prefix
 
     return prefix
 
@@ -794,7 +917,7 @@ def get_source_and_dest_operands(
     src = input.second_operand
     dest = input.first_operand
 
-    if input.operation in ["idiv", "jmp"]:
+    if input.operation in ["idiv", "jmp", "inc", "dec"]:
         src = input.first_operand
         return src, None
 
@@ -809,10 +932,13 @@ def get_opcode(input: Input) -> OpCode:
     if not operation_modes:
         raise ValueError(f"Operation {operation} not found")
     result = operation_modes
-
     if operand_src:
-        result = result.get(operand_src.get_type())
+        result = result.get(operand_src.get_type()) or result.get(
+            operand_src._raw
+        )
+
         if not result:
+
             raise ValueError(
                 f"Operation {operation} with source operand type {operand_src.get_type()} not found"
             )
@@ -850,9 +976,9 @@ def get_d(input: Input) -> Optional[int]:
         return 0
     elif dest and dest.get_type() == OperandTypes.REGISTER:
         return 1
-    elif dest and dest.get_type() == OperandTypes.Memory:
+    elif dest and dest.get_type() == OperandTypes.MEMORY:
         return 0
-    elif src and src.get_type() == OperandTypes.Memory:
+    elif src and src.get_type() == OperandTypes.MEMORY:
         return 1
 
 
@@ -900,7 +1026,7 @@ def get_mod(input: Input) -> Optional[MOD_32]:
     if to_code is None:
         raise RuntimeError(f"No operand to code")
 
-    if to_code.get_type() == OperandTypes.Memory:
+    if to_code.get_type() == OperandTypes.MEMORY:
         addr_mod = to_code.get_addressing_mode()
         if addr_mod in [
             AddressingModes.DIRECT_ADDR_VALUE,
@@ -968,7 +1094,7 @@ def get_rm(input: Input):
         if operand_require_rex(to_code):
             return register_table_64[to_code.get_registers_used()[0]][1:]
         return rm_table_32_bit[to_code.get_registers_used()[0]]
-    elif to_code.get_type() == OperandTypes.Memory:
+    elif to_code.get_type() == OperandTypes.MEMORY:
         if to_code.get_addressing_mode() in [
             AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP,
             AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP,
@@ -1064,12 +1190,12 @@ def get_sib(input: Input) -> Optional[str]:
     to_code = None
     if (
         input.first_operand
-        and input.first_operand.get_type() == OperandTypes.Memory
+        and input.first_operand.get_type() == OperandTypes.MEMORY
     ):
         to_code = input.first_operand
     elif (
         input.second_operand
-        and input.second_operand.get_type() == OperandTypes.Memory
+        and input.second_operand.get_type() == OperandTypes.MEMORY
     ):
         to_code = input.second_operand
     if to_code is None:
@@ -1091,15 +1217,21 @@ def reverse_byte_wise(binary: str) -> str:
     return new_num
 
 
-def get_data(input) -> Optional[str]:
+def get_data(input: Input) -> Optional[str]:
     """Returns the data value"""
     if (
         input.second_operand
         and input.second_operand.get_type() == OperandTypes.IMMEDIATE
     ):
+        value = input.second_operand.get_value()
+        value_hex = "1" + hex(value)[2:]
+        real_value = bin(int(value_hex, 16))[3:]
+        size = len(real_value)
+        if size < 8:
+            size = 8
         return format(
-            input.second_operand.get_value(),
-            f"0{input.first_operand.get_size()}b",
+            int(real_value, 2),
+            f"0{size}b",
         )
 
 
@@ -1109,7 +1241,7 @@ def get_disp(input: Input) -> Optional[str]:
     if to_code is None:
         return None
 
-    if to_code.get_type() != OperandTypes.Memory:
+    if to_code.get_type() != OperandTypes.MEMORY:
         return
 
     if (
@@ -1152,6 +1284,8 @@ def get_disp(input: Input) -> Optional[str]:
 
 
 def get_r(input: Input) -> str:
+    if get_opcode(input).r is not None:
+        return str(get_opcode(input).r)
     coded_with_reg = select_operand_to_code_with_reg(input)
     if coded_with_reg is None:
         return "0"
@@ -1164,7 +1298,7 @@ def get_rex_w(input: Input) -> int:
     for operand in [input.first_operand, input.second_operand]:
         if not operand:
             continue
-        size = operand.get_size()
+        size = operand.get_operand_size()
         if size in [8, 16, 32]:
             return 0
         else:
@@ -1195,6 +1329,9 @@ def get_b(input: Input) -> str:
 
 
 def get_x(input: Input) -> str:
+    if get_opcode(input).x is not None:
+        return str(get_opcode(input).x)
+
     if not has_sib(input):
         return "0"
 
@@ -1204,7 +1341,7 @@ def get_x(input: Input) -> str:
 
     index = operand.get_index()
     if index is None:
-        raise ValueError("No index specified")
+        return "0"
     return register_table_64[index][0]
 
 
@@ -1290,17 +1427,16 @@ def get_code(asm_instruction: str):
     if sib is not None:
         result += sib
 
+    disp = get_disp(input)
+    if disp is not None:
+        formatted = reverse_byte_wise(disp)
+        print(f"disp: {formatted}")
+        result += formatted
+
     data = get_data(input)
     if data is not None:
         formatted = reverse_byte_wise(data)
         print(f"data: {formatted}")
-        result += formatted
-
-    disp = get_disp(input)
-    if disp is not None:
-        print("disp raw: " + disp)
-        formatted = reverse_byte_wise(disp)
-        print(f"disp: {formatted}")
         result += formatted
 
     print(f"before hex: {result}")
@@ -1361,6 +1497,10 @@ assert get_code("add edi,DWORD PTR [ebx]") == "67033b"
 # test
 assert get_code("test r8d,edx") == "4185d0"
 
+assert get_code("test QWORD PTR [rbp+0x5555551e],r11") == "4c859d1e555555"
+
+assert get_code("test r11,QWORD PTR [rbp+0x5555551e]") == "4c859d1e555555"
+
 # imul
 assert get_code("imul r8w,WORD PTR [r14]") == "66450faf06"
 
@@ -1368,12 +1508,18 @@ assert get_code("imul r8w,WORD PTR [r14]") == "66450faf06"
 assert get_code("xor r8b,BYTE PTR [rbp]") == "44324500"
 
 # xadd
+
 assert get_code("xadd QWORD PTR [rbx+0x5555551e],r10") == "4c0fc1931e555555"
 
 assert get_code("xadd QWORD PTR [rbx*1+0x1],r10") == "4c0fc1141d01000000"
 
 # bsf
+
 assert get_code("bsf r11,QWORD PTR [r8+r12*4+0x16]") == "4f0fbc5ca016"
+
+# bsr
+
+assert get_code("bsr r11,QWORD PTR [rbp+r12*1]") == "4e0fbd5c2500"
 
 # idiv
 assert get_code("idiv QWORD PTR [r11*4]") == "4af73c9d00000000"
@@ -1383,8 +1529,50 @@ assert get_code("jmp r8") == "41ffe0"
 
 assert get_code("jmp QWORD PTR [r8]") == "41ff20"
 
+assert get_code("jmp QWORD PTR[r9+r12*8+0x5716]") == "43ffa4e116570000"
 
 # assert get_code("jo hello") == "0f8000000000"
 
 # cmp
-# assert get_code("cmp r8, rdx") == "4939d0"
+assert get_code("cmp r8,rdx") == "4939d0"
+
+# xchg
+
+assert get_code("xchg r11,QWORD PTR [rbp+0x5555551e]") == "4c879d1e555555"
+
+assert get_code("xchg QWORD PTR [rbp+0x5555551e],r11") == "4c879d1e555555"
+
+
+# sub
+assert get_code("sub DWORD PTR [ebp+ecx*4],edx") == "6729548d00"
+
+assert get_code("sub QWORD PTR [rbp+rcx*4],rdx") == "4829548d00"
+
+# sbb
+
+assert get_code("sbb QWORD PTR [rbp+rcx*4+0x94],rdx") == "4819948d94000000"
+
+# inc
+assert get_code("inc r10") == "49ffc2"
+
+# dec
+assert get_code("dec r10") == "49ffca"
+
+assert get_code("dec QWORD PTR [0x5555551e]") == "48ff0c251e555555"
+assert get_code("dec DWORD PTR [0x5555551e]") == "ff0c251e555555"
+
+# shl
+
+assert get_code("shl WORD PTR[eax+ecx*1+0x94],0x5") == "6766c1a4089400000005"
+
+assert get_code("shl QWORD PTR[r8d+r9d*1+0x94]") == "674bd1a40894000000"
+
+# shr
+
+assert get_code("shr QWORD PTR[rax+rcx*1+0x94],cl") == "48d3ac0894000000"
+
+# neg
+assert get_code("neg r11") == "49f7db"
+
+# not
+assert get_code("not QWORD PTR [r11]") == "49f713"
