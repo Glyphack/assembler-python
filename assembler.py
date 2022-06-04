@@ -4,7 +4,7 @@ import pdb
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 ValidationErr = RuntimeError
 
@@ -345,17 +345,30 @@ class OpCode:
     skip_s: bool = True
     flip_d: bool = False
 
+    # reg is hardcoded
     reg: Optional[str] = None
-    skip_reg: bool = False
 
+    # which operand does rm codes
     rm_codes: Optional[int] = None
+
+    # do not calculate rm
     rm: Optional[str] = None
+
+    # do not include rm in final code
     skip_rm: bool = False
 
+    # do not calculate mod
     mod: Optional[MOD_32] = None
+
+    # does not include mod in final code
     skip_mod: bool = False
 
+    # no use
+    source_operand_number: Optional[int] = None
+    dest_operand_number: Optional[int] = None
 
+
+# Operation: Source: Destination
 opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
     "mov": {
         OperandTypes.REGISTER: {
@@ -428,6 +441,26 @@ opcode_table: Dict[str, Dict[OperandTypes, Dict[OperandTypes, OpCode]]] = {
             OperandTypes.REGISTER: OpCode(
                 opcode="00001111101111", d=0, w=0, flip_d=True
             ),
+        }
+    },
+    "idiv": {
+        OperandTypes.Memory: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111101",
+                source_operand_number=1,
+                reg="111",
+            )
+        },
+    },
+    "jmp": {
+        OperandTypes.REGISTER: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111111",
+                reg="100",
+                mod=MOD_32.REG_ADDR,
+                rm_codes=1,
+                d=1,
+            )
         }
     },
 }
@@ -650,16 +683,20 @@ def parse_instruction(instruction: str) -> Input:
     logger.debug(f"operation is: {operation}")
     cursor = len(operation)
 
-    while instruction[cursor] != ",":
+    while cursor < len(instruction) and instruction[cursor] != ",":
         cursor += 1
 
     first_operand = instruction[len(operation) + 1 : cursor]
     logger.debug(f"first operand is: {first_operand}")
 
-    second_operand = instruction[cursor + 1 :]
+    if cursor + 1 < len(instruction):
+        second_operand = instruction[cursor + 1 :]
+        second_operand = Operand(second_operand)
+    else:
+        second_operand = None
     logger.debug(f"second operand is: {second_operand}")
 
-    return Input(operation, Operand(first_operand), Operand(second_operand))
+    return Input(operation, Operand(first_operand), second_operand)
 
 
 def operand_require_rex(operand: Operand) -> bool:
@@ -704,11 +741,23 @@ def get_prefix(input: Input) -> Optional[str]:
     return prefix
 
 
+def get_source_and_dest_operands(
+    input: Input,
+) -> Tuple[Optional[Operand], Optional[Operand]]:
+    src = input.second_operand
+    dest = input.first_operand
+
+    if input.operation in ["idiv", "jmp"]:
+        src = input.first_operand
+        return src, None
+
+    return src, dest
+
+
 def get_opcode(input: Input) -> OpCode:
     """Returns the opcode"""
     operation = input.operation
-    operand_dest = input.first_operand
-    operand_src = input.second_operand
+    operand_src, operand_dest = get_source_and_dest_operands(input)
     operation_modes = opcode_table.get(operation)
     if not operation_modes:
         raise ValueError(f"Operation {operation} not found")
@@ -745,17 +794,18 @@ def get_opcode(input: Input) -> OpCode:
 
 def get_d(input: Input) -> Optional[int]:
     """d is 1 if first operand is register"""
+
+    src, dest = get_source_and_dest_operands(input)
     if get_opcode(input).d is not None:
         return get_opcode(input).d
-    elif (
-        input.second_operand
-        and input.second_operand.get_type() == OperandTypes.REGISTER
-    ):
+
+    elif src and src.get_type() == OperandTypes.REGISTER:
         return 0
-    elif (
-        input.first_operand
-        and input.first_operand.get_type() == OperandTypes.REGISTER
-    ):
+    elif dest and dest.get_type() == OperandTypes.REGISTER:
+        return 1
+    elif dest and dest.get_type() == OperandTypes.Memory:
+        return 0
+    elif src and src.get_type() == OperandTypes.Memory:
         return 1
 
 
@@ -779,10 +829,6 @@ def get_code_w(input: Input):
     opcode = get_opcode(input)
     if opcode.w is not None:
         return opcode.w
-    if input.first_operand is None:
-        return 1
-    if input.second_operand is None:
-        return None
 
     if input.get_operation_used_registers_size() == 8:
         return 0
@@ -801,10 +847,9 @@ def get_mod(input: Input) -> Optional[MOD_32]:
     if op_code.flip_d:
         d = int(not d)
     if d == 0:
-        to_code = input.first_operand
+        _, to_code = get_source_and_dest_operands(input)
     elif d == 1:
-        to_code = input.second_operand
-
+        to_code, _ = get_source_and_dest_operands(input)
     if to_code is None:
         raise RuntimeError(f"No operand to code")
 
@@ -844,15 +889,16 @@ def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
     to_code = None
     op_code = get_opcode(input)
     d = get_d(input)
+    src, dest = get_source_and_dest_operands(input)
     if op_code.flip_d:
         d = int(not d)
 
     if d == 0:
         # rm codes the destination
-        to_code = input.first_operand
+        to_code = dest
     elif d == 1:
         # rm codes the source
-        to_code = input.second_operand
+        to_code = src
 
     op_code = get_opcode(input)
     if op_code.rm_codes == 1:
@@ -879,6 +925,7 @@ def get_rm(input: Input):
         if to_code.get_addressing_mode() in [
             AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP,
             AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP,
+            AddressingModes.REG_INDIRECT_ADDR_INDEX,
         ]:
             return SIB
         if operand_require_rex(to_code):
@@ -893,6 +940,8 @@ def get_rm(input: Input):
 
 def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
     op_code = get_opcode(input)
+    if op_code.reg is not None:
+        return None
     d = get_d(input)
     if op_code.flip_d:
         d = int(not d)
@@ -905,6 +954,9 @@ def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
 
 def get_reg(input: Input) -> Optional[str]:
     """Returns the REG value"""
+    opcode = get_opcode(input)
+    if opcode.reg is not None:
+        return opcode.reg
     to_code = select_operand_to_code_with_reg(input)
     if to_code is None:
         raise ValueError(f"No second operand for {to_code}")
@@ -1055,11 +1107,13 @@ def get_disp(input: Input) -> Optional[str]:
 def get_r(input: Input) -> str:
     coded_with_reg = select_operand_to_code_with_reg(input)
     if coded_with_reg is None:
-        raise ValueError(f"No second operand for {coded_with_reg}")
+        return "0"
     return register_table_64[coded_with_reg.get_registers_used()[0]][0]
 
 
 def get_rex_w(input: Input) -> int:
+    if input.operation == "jmp":
+        return 0
     for operand in [input.first_operand, input.second_operand]:
         if not operand:
             continue
@@ -1273,3 +1327,9 @@ assert get_code("xadd QWORD PTR [rbx*1+0x1],r10") == "4c0fc1141d01000000"
 
 # bsf
 assert get_code("bsf r11,QWORD PTR [r8+r12*4+0x16]") == "4f0fbc5ca016"
+
+# idiv
+assert get_code("idiv QWORD PTR [r11*4]") == "4af73c9d00000000"
+
+# jmp
+assert get_code("jmp r8") == "41ffe0"
