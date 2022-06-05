@@ -1,6 +1,6 @@
 import re
 import sys
-from assembler import get_code
+from assembler import get_code, hex_bin, print_binary_formatted
 
 import requests
 
@@ -28,28 +28,161 @@ def get_answer_from_site(input):
     return result
 
 
-test_cases = [
+instructions = ["mov", "add"]
+two_operands = [
+    # reg to reg
+    "al,bh",
+    "dl,bl",
+    "cl,al",
+    "cx,ax",
+    "ecx,eax",
+    # imm to reg
+    "dx,0x1352",
+    "dx,0x3545",
+    # mem to reg
+    "edx,DWORD PTR [ecx*4]",
+    "edi,DWORD PTR [ebx]",
+    "edx,DWORD PTR [ebp+ecx*4]",
+    "edx,DWORD PTR [eax+ecx*1+0x55]",
+    "edx,DWORD PTR [eax+ecx*1]",
+    "edx,DWORD PTR [0x5555551E]",
+    "edx,DWORD PTR [ecx*4+0x06]",
+    "edx,DWORD PTR [ebx+ecx*4]",
+    "edx,DWORD PTR [ebp+ecx*4+0x55555506]",
+    "edx,DWORD PTR [ebp+ecx*4+0x06]",
+    # imm to mem
+    "WORD PTR[eax+ecx*1+0x94],0x5",
+    # with 64 bit registers
+    "BYTE PTR[rax+rcx*1+0x94],cl",
+    "rdx,QWORD PTR [rcx*4]",
+    "rdi,QWORD PTR [rbx]",
+    "rdx,QWORD PTR [ebp+ecx*4]",
+    "QWORD PTR[eax+ecx*1+0x94],0x5",
+    "rdx,QWORD PTR [eax+ecx*1+0x55]",
+    "rdx,QWORD PTR [eax+ecx*1]",
+    "rdx,QWORD PTR [0x5555551E]",
+    "rdx,QWORD PTR [ecx*4+0x06]",
+    "rdx,QWORD PTR [ebx+ecx*4]",
+    "rdx,QWORD PTR [ebp+ecx*4+0x55555506]",
+    "rdx,QWORD PTR [ebp+ecx*4+0x06]",
+    "QWORD PTR[rax+rcx*1+0x94],rcx",
+    "r11,QWORD PTR [r8+r12*4+0x16]",
+    "r11,QWORD PTR [rbp+0x5555551e]",
+    "r11,QWORD PTR [rbp+r12*1]",
+    "QWORD PTR [ebp+0x5555551e],r11",
+    "r8w,WORD PTR [r14]",
+    "r8b,BYTE PTR [rbp]",
+    "QWORD PTR [rbx+0x5555551e],r10",
+    "QWORD PTR [rbp+0x5555551e],r11",
+    "QWORD PTR [rbx*1+0x1],r10",
+]
+
+sample = [
+    "mov WORD PTR[eax+ecx*1+0x94],0x5",
+    "mov r11,QWORD PTR [r8+r12*4+0x16]",
+    "mov edx,DWORD PTR [eax+ecx*1+0x55]",
+    "mov edx,DWORD PTR [eax+ecx*1]",
+    "mov r11,QWORD PTR [rbp+0x5555551e]",
     "mov al,bh",
+    "mov edx,DWORD PTR [ebp+ecx*4+0x55555506]",
+    "mov edx,DWORD PTR [ebp+ecx*4+0x06]",
+    "mov BYTE PTR[rax+rcx*1+0x94],cl",
+    "mov dx,0x1352",
+    "mov r11,QWORD PTR [rbp+r12*1]",
     "mov dl,bl",
+    "mov cx,ax",
+    "mov QWORD PTR [ebp+0x5555551e],r11",
+    "mov edx,DWORD PTR [0x5555551E]",
+    "mov r8w,WORD PTR [r14]",
+    "mov r8b,BYTE PTR [rbp]",
+    "mov edi,DWORD PTR [ebx]",
+    "mov edx,DWORD PTR [ebp+ecx*4]",
+    "mov edx,DWORD PTR [ecx*4]",
     "mov ecx,eax",
     "mov cl,al",
-    "mov cx,ax",
-    "mov dx,0x1352",
+    "mov QWORD PTR [rbx+0x5555551e],r10",
     "mov dx,0x3545",
-    "mov edx,DWORD PTR [eax+ecx*1]",
-    "mov edx,DWORD PTR [eax+ecx*1+0x55]",
-    "mov edx,DWORD PTR [ecx*4]",
     "mov edx,DWORD PTR [ecx*4+0x06]",
-    "mov edx,DWORD PTR [ebp+ecx*4]",
+    "mov QWORD PTR [rbp+0x5555551e],r11",
     "mov edx,DWORD PTR [ebx+ecx*4]",
-    "mov edx,DWORD PTR [ebp+ecx*4+0x06]",
-    "mov edx,DWORD PTR [ebp+ecx*4+0x55555506]",
-    "mov edx,DWORD PTR [0x5555551E]",
+    "mov QWORD PTR [rbx*1+0x1],r10",
     "add ecx,eax",
     "add cx,ax",
-    "adc dx,0x3545",
     "add edi,DWORD PTR [ebx]",
-    "test r8d,edx",
+    "add al,bh",
+    "add dl,bl",
+    "add ecx,eax",
+    "add cl,al",
+    "add cx,ax",
+    "add dx,0x1352",
+    "add dx,0x3545",
+    "add edx,DWORD PTR [eax+ecx*1]",
+    "add edx,DWORD PTR [eax+ecx*1+0x55]",
+    "add edx,DWORD PTR [ecx*4]",
+    "add edx,DWORD PTR [ecx*4+0x06]",
+    "add edx,DWORD PTR [ebp+ecx*4]",
+    "add edx,DWORD PTR [ebx+ecx*4]",
+    "add edx,DWORD PTR [ebp+ecx*4+0x06]",
+    "add edx,DWORD PTR [ebp+ecx*4+0x55555506]",
+    "add edx,DWORD PTR [0x5555551E]",
+    "add dx,0x3545",
+    "add al,bh",
+    "add dl,bl",
+    "add ecx,eax",
+    "add cl,al",
+    "add cx,ax",
+    "add dx,0x1352",
+    "add dx,0x3545",
+    "add edx,DWORD PTR [eax+ecx*1]",
+    "add edx,DWORD PTR [eax+ecx*1+0x55]",
+    "add edx,DWORD PTR [ecx*4]",
+    "add edx,DWORD PTR [ecx*4+0x06]",
+    "add edx,DWORD PTR [ebp+ecx*4]",
+    "add edx,DWORD PTR [ebx+ecx*4]",
+    "add edx,DWORD PTR [ebp+ecx*4+0x06]",
+    "add edx,DWORD PTR [ebp+ecx*4+0x55555506]",
+    "add edx,DWORD PTR [0x5555551E]" "dec QWORD PTR [0x5555551e]",
+    "add WORD PTR[eax+ecx*1+0x94],0x5",
+    "add QWORD PTR[rax+rcx*1+0x94],cl",
+    "add QWORD PTR [rbp+0x5555551e],r11",
+    "add r11,QWORD PTR [rbp+0x5555551e]",
+    "add QWORD PTR [ebp+0x5555551e],r11",
+    "add r8w,WORD PTR [r14]",
+    "add r8b,BYTE PTR [rbp]",
+    "add QWORD PTR [rbx+0x5555551e],r10",
+    "add QWORD PTR [rbx*1+0x1],r10",
+    "add r11,QWORD PTR [r8+r12*4+0x16]",
+    "add r11,QWORD PTR [rbp+r12*1]",
+    "adc dx,0x3545",
+    "adc al,bh",
+    "adc dl,bl",
+    "adc ecx,eax",
+    "adc cl,al",
+    "adc cx,ax",
+    "adc dx,0x1352",
+    "adc dx,0x3545",
+    "adc edx,DWORD PTR [eax+ecx*1]",
+    "adc edx,DWORD PTR [eax+ecx*1+0x55]",
+    "adc edx,DWORD PTR [ecx*4]",
+    "adc edx,DWORD PTR [ecx*4+0x06]",
+    "adc edx,DWORD PTR [ebp+ecx*4]",
+    "adc edx,DWORD PTR [ebx+ecx*4]",
+    "adc edx,DWORD PTR [ebp+ecx*4+0x06]",
+    "adc edx,DWORD PTR [ebp+ecx*4+0x55555506]",
+    "adc edx,DWORD PTR [0x5555551E]" "dec QWORD PTR [0x5555551e]",
+    "adc WORD PTR[eax+ecx*1+0x94],0x5",
+    "adc QWORD PTR[r8d+r9d*1+0x94]",
+    "adc QWORD PTR[rax+rcx*1+0x94],cl",
+    "adc QWORD PTR [rbp+0x5555551e],r11",
+    "adc r11,QWORD PTR [rbp+0x5555551e]",
+    "adc QWORD PTR [ebp+0x5555551e],r11",
+    "adc r8w,WORD PTR [r14]",
+    "adc r8b,BYTE PTR [rbp]",
+    "adc QWORD PTR [rbx+0x5555551e],r10",
+    "adc QWORD PTR [rbx*1+0x1],r10",
+    "adc r11,QWORD PTR [r8+r12*4+0x16]",
+    "adc r11,QWORD PTR [rbp+r12*1]",
+    "adc r8d,edx",
     "test QWORD PTR [rbp+0x5555551e],r11",
     "test r11,QWORD PTR [rbp+0x5555551e]",
     "test QWORD PTR [ebp+0x5555551e],r11",
@@ -95,11 +228,26 @@ test_cases = [
     "syscall",
 ]
 
-for test in test_cases:
-    my_code = get_code(test)
-    from_site = get_answer_from_site(test)
-    if my_code != from_site:
-        print(f"wrong answer for {test}")
-        print(f"site: {from_site}")
-        print(f"my code: {my_code}")
-        sys.exit()
+
+def run_test(test_cases, operation=None):
+    for test in test_cases:
+        if operation and not test.split(" ")[0] == operation:
+            continue
+        my_code = get_code(test)
+        from_site = get_answer_from_site(test)
+        if my_code != from_site:
+            print(f"wrong answer for {test}")
+            print(f"site: {from_site}")
+            print(f"my code: {my_code}")
+            print("BINARY")
+            print("g", print_binary_formatted(hex_bin("0x" + my_code)))
+            print("e", print_binary_formatted(hex_bin("0x" + from_site)))
+            sys.exit()
+
+
+test_cases = []
+for ins in instructions:
+    for operand in two_operands:
+        test_cases.append(f"{ins} {operand}")
+run_test(test_cases, "mov")
+# run_test(test_cases, "add")
