@@ -1,10 +1,11 @@
-from email.headerregistry import Address
 import logging as logger
 import pdb
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
+
+# flip d or rm codes or dynamic
 
 ValidationErr = RuntimeError
 
@@ -371,9 +372,7 @@ class OpCode:
 
     opcode: str
     w: Optional[int] = None
-    skip_d: bool = False
     d: Optional[int] = None
-    skip_s: bool = True
     flip_d: bool = False
 
     # reg is hardcoded
@@ -382,10 +381,18 @@ class OpCode:
     # which operand does rm codes
     rm_codes: Optional[int] = None
 
+    reg_codes: Optional[int] = None
+
     # do not calculate rm
     rm: Optional[str] = None
 
     # do not include rm in final code
+    skip_prefix: bool = False
+    skip_rex: bool = False
+    skip_d: bool = False
+    skip_s: bool = True
+    skip_w: bool = False
+    skip_reg: bool = False
     skip_rm: bool = False
 
     # do not calculate mod
@@ -398,8 +405,14 @@ class OpCode:
     source_operand_number: Optional[int] = None
     dest_operand_number: Optional[int] = None
 
+    disp_size: Optional[int] = None
+
     r: Optional[int] = None
     x: Optional[int] = None
+
+    b_extends_reg: bool = False
+
+    only_rex_new_register: bool = False
 
 
 # Operation: Source: Destination
@@ -415,7 +428,11 @@ opcode_table: Dict[
         },
         OperandTypes.IMMEDIATE: {
             OperandTypes.REGISTER: OpCode(
-                opcode="1011", skip_d=True, skip_mod=True, skip_rm=True
+                opcode="1011",
+                skip_d=True,
+                skip_mod=True,
+                skip_rm=True,
+                reg_codes=1,
             ),
         },
         OperandTypes.MEMORY: {OperandTypes.REGISTER: OpCode(opcode="100010")},
@@ -563,7 +580,7 @@ opcode_table: Dict[
     },
     "shl": {
         OperandTypes.IMMEDIATE: {
-            OperandTypes.MEMORY: OpCode(opcode="110000", reg="100", d=0)
+            OperandTypes.MEMORY: OpCode(opcode="110000", reg="100", d=0),
         },
         OperandTypes.NOT_EXIST: {
             OperandTypes.MEMORY: OpCode(opcode="110100", reg="100", d=0)
@@ -587,6 +604,152 @@ opcode_table: Dict[
         OperandTypes.NOT_EXIST: {
             OperandTypes.MEMORY: OpCode(
                 opcode="111101", d=1, reg="010", flip_d=True
+            )
+        }
+    },
+    "call": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="111111",
+                mod=MOD_32.REG_ADDR,
+                d=1,
+                w=1,
+                reg="010",
+                rm_codes=1,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="111111", d=1, w=1, reg="010", rm_codes=1
+            ),
+        }
+    },
+    "ret": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="11000010",
+                skip_prefix=True,
+                skip_rex=True,
+                skip_d=True,
+                skip_s=True,
+                skip_w=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+            ),
+            OperandTypes.IMMEDIATE: OpCode(
+                opcode="11000010",
+                skip_prefix=True,
+                skip_rex=True,
+                skip_d=True,
+                skip_s=True,
+                skip_w=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+                disp_size=16,
+            ),
+        }
+    },
+    "push": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="01010",
+                skip_mod=True,
+                skip_rm=True,
+                b_extends_reg=True,
+                skip_d=True,
+                skip_w=True,
+                reg_codes=1,
+                only_rex_new_register=True,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="111111", d=1, w=1, reg="110", rm_codes=1
+            ),
+        }
+    },
+    "pop": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="01011",
+                reg_codes=1,
+                skip_d=True,
+                skip_w=True,
+                skip_mod=True,
+                skip_rm=True,
+                b_extends_reg=True,
+                only_rex_new_register=True,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100011", d=1, w=1, reg="000", rm_codes=1
+            ),
+        }
+    },
+    "stc": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="11111001",
+                skip_d=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+                skip_prefix=True,
+                skip_rex=True,
+                skip_w=True,
+            )
+        }
+    },
+    "clc": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="11111000",
+                skip_d=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+                skip_prefix=True,
+                skip_rex=True,
+                skip_w=True,
+            )
+        }
+    },
+    "std": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="11111101",
+                skip_d=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+                skip_prefix=True,
+                skip_rex=True,
+                skip_w=True,
+            )
+        }
+    },
+    "cld": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="11111100",
+                skip_d=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+                skip_prefix=True,
+                skip_rex=True,
+                skip_w=True,
+            )
+        }
+    },
+    "syscall": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="0000111100000101",
+                skip_d=True,
+                skip_mod=True,
+                skip_reg=True,
+                skip_rm=True,
+                skip_prefix=True,
+                skip_rex=True,
+                skip_w=True,
             )
         }
     },
@@ -845,6 +1008,10 @@ def parse_instruction(instruction: str) -> Input:
         cursor += 1
 
     first_operand = instruction[len(operation) + 1 : cursor].strip()
+    if not first_operand:
+        first_operand = None
+    else:
+        first_operand = Operand(first_operand)
     logger.debug(f"first operand is: {first_operand}")
 
     if cursor + 1 < len(instruction):
@@ -854,7 +1021,7 @@ def parse_instruction(instruction: str) -> Input:
         second_operand = None
     logger.debug(f"second operand is: {second_operand}")
 
-    return Input(operation, Operand(first_operand), second_operand)
+    return Input(operation, first_operand, second_operand)
 
 
 def operand_require_rex(operand: Operand) -> bool:
@@ -874,6 +1041,8 @@ def operand_require_rex(operand: Operand) -> bool:
 
 
 def get_prefix(input: Input) -> Optional[str]:
+    if get_opcode(input).skip_prefix:
+        return None
     dest = input.second_operand
     src = input.first_operand
 
@@ -968,6 +1137,9 @@ def get_opcode(input: Input) -> OpCode:
 def get_d(input: Input) -> Optional[int]:
     """d is 1 if first operand is register"""
 
+    if get_opcode(input).skip_d:
+        return None
+
     src, dest = get_source_and_dest_operands(input)
     if get_opcode(input).d is not None:
         return get_opcode(input).d
@@ -984,6 +1156,8 @@ def get_d(input: Input) -> Optional[int]:
 
 def get_s(input: Input) -> Optional[int]:
     """Returns the s bit"""
+    if get_opcode(input).skip_s:
+        return None
     if not input.second_operand or not input.first_operand:
         return None
     if not input.second_operand.get_type() == OperandTypes.IMMEDIATE:
@@ -1000,6 +1174,8 @@ def get_s(input: Input) -> Optional[int]:
 def get_code_w(input: Input):
     """Returns the W value"""
     opcode = get_opcode(input)
+    if opcode.skip_w:
+        return None
     if opcode.w is not None:
         return opcode.w
 
@@ -1015,14 +1191,8 @@ def get_mod(input: Input) -> Optional[MOD_32]:
     if op_code.mod is not None:
         return op_code.mod
 
-    to_code = None
-    d = get_d(input)
-    if op_code.flip_d:
-        d = int(not d)
-    if d == 0:
-        _, to_code = get_source_and_dest_operands(input)
-    elif d == 1:
-        to_code, _ = get_source_and_dest_operands(input)
+    to_code = select_operand_to_code_with_rm(input)
+
     if to_code is None:
         raise RuntimeError(f"No operand to code")
 
@@ -1065,7 +1235,6 @@ def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
     src, dest = get_source_and_dest_operands(input)
     if op_code.flip_d:
         d = int(not d)
-
     if d == 0:
         # rm codes the destination
         to_code = dest
@@ -1085,7 +1254,8 @@ def get_rm(input: Input):
     """Returns the RM value"""
     SIB = "100"
     to_code = select_operand_to_code_with_rm(input)
-
+    if get_opcode(input).skip_rm:
+        return None
     if to_code is None:
         raise RuntimeError
     logger.debug(f"rm codes the {to_code}")
@@ -1115,6 +1285,12 @@ def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
     op_code = get_opcode(input)
     if op_code.reg is not None:
         return None
+
+    if op_code.reg_codes == 1:
+        return input.first_operand
+    elif op_code.reg_codes == 2:
+        return input.second_operand
+
     d = get_d(input)
     if op_code.flip_d:
         d = int(not d)
@@ -1128,6 +1304,8 @@ def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
 def get_reg(input: Input) -> Optional[str]:
     """Returns the REG value"""
     opcode = get_opcode(input)
+    if opcode.skip_reg:
+        return None
     if opcode.reg is not None:
         return opcode.reg
     to_code = select_operand_to_code_with_reg(input)
@@ -1219,20 +1397,25 @@ def reverse_byte_wise(binary: str) -> str:
 
 def get_data(input: Input) -> Optional[str]:
     """Returns the data value"""
-    if (
-        input.second_operand
-        and input.second_operand.get_type() == OperandTypes.IMMEDIATE
-    ):
-        value = input.second_operand.get_value()
-        value_hex = "1" + hex(value)[2:]
-        real_value = bin(int(value_hex, 16))[3:]
-        size = len(real_value)
-        if size < 8:
-            size = 8
-        return format(
-            int(real_value, 2),
-            f"0{size}b",
-        )
+    imm_val_op = None
+    for op in [input.first_operand, input.second_operand]:
+        if op and op.get_type() == OperandTypes.IMMEDIATE:
+            imm_val_op = op
+    if imm_val_op is None:
+        return
+    value = imm_val_op.get_value()
+    value_hex = "1" + hex(value)[2:]
+    real_value = bin(int(value_hex, 16))[3:]
+
+    size = len(real_value)
+    if size < 8:
+        size = 8
+    if get_opcode(input).disp_size:
+        size = get_opcode(input).disp_size
+    return format(
+        int(real_value, 2),
+        f"0{size}b",
+    )
 
 
 def get_disp(input: Input) -> Optional[str]:
@@ -1286,6 +1469,8 @@ def get_disp(input: Input) -> Optional[str]:
 def get_r(input: Input) -> str:
     if get_opcode(input).r is not None:
         return str(get_opcode(input).r)
+    if get_opcode(input).b_extends_reg:
+        return "0"
     coded_with_reg = select_operand_to_code_with_reg(input)
     if coded_with_reg is None:
         return "0"
@@ -1293,7 +1478,7 @@ def get_r(input: Input) -> str:
 
 
 def get_rex_w(input: Input) -> int:
-    if input.operation == "jmp":
+    if input.operation in ["jmp", "call", "push", "pop"]:
         return 0
     for operand in [input.first_operand, input.second_operand]:
         if not operand:
@@ -1307,10 +1492,11 @@ def get_rex_w(input: Input) -> int:
 
 
 def get_b(input: Input) -> str:
-    mod = get_mod(input)
     op = select_operand_to_code_with_rm(input)
+    if get_opcode(input).b_extends_reg:
+        op = select_operand_to_code_with_reg(input)
     if op is None:
-        return ""
+        return "0"
     addr_mode = op.get_addressing_mode()
 
     # rax
@@ -1346,12 +1532,19 @@ def get_x(input: Input) -> str:
 
 
 def get_rex(input: Input) -> Optional[str]:
-    # We only have rex if 64 bit operands or 32 bit operands starting with r are used
+    if get_opcode(input).skip_rex:
+        return
+    # Only have rex if 64 bit operands or 32 bit operands starting with r are used
     need_rex = False
     to_code = None
     for operand in [input.first_operand, input.second_operand]:
         if operand is None:
             continue
+        if get_opcode(input).only_rex_new_register:
+            print(operand._raw)
+            print(register_table_64.get(operand._raw))
+            if register_table_64.get(operand._raw, "0")[0] == "0":
+                continue
         if operand_require_rex(operand):
             need_rex = True
             to_code = operand
@@ -1364,7 +1557,7 @@ def get_rex(input: Input) -> Optional[str]:
     b = get_b(input)
     x = get_x(input)
 
-    print(f"r: {r}, w: {w}, b: {b}, x: {x}")
+    print(f"w: {w}, r: {r}, x: {x}, b: {b}")
 
     return "0100" + str(w) + r + x + b
 
@@ -1567,6 +1760,8 @@ assert get_code("shl WORD PTR[eax+ecx*1+0x94],0x5") == "6766c1a4089400000005"
 
 assert get_code("shl QWORD PTR[r8d+r9d*1+0x94]") == "674bd1a40894000000"
 
+# assert get_code("shl rax,0x1") == "48d1e0"
+
 # shr
 
 assert get_code("shr QWORD PTR[rax+rcx*1+0x94],cl") == "48d3ac0894000000"
@@ -1576,3 +1771,39 @@ assert get_code("neg r11") == "49f7db"
 
 # not
 assert get_code("not QWORD PTR [r11]") == "49f713"
+
+# call
+assert get_code("call r9") == "41ffd1"
+
+assert get_code("call QWORD PTR [r9]") == "41ff11"
+
+assert get_code("ret") == "c2"
+
+assert get_code("ret 0x16") == "c21600"
+
+
+# push
+assert get_code("push r12") == "4154"
+assert get_code("push QWORD PTR [r10+r11*8]") == "43ff34da"
+
+# pop
+assert get_code("pop r12") == "415c"
+
+assert get_code("pop rax") == "58"
+
+assert get_code("pop QWORD PTR [r12]") == "418f0424"
+
+# stc
+assert get_code("stc") == "f9"
+
+# clc
+assert get_code("clc") == "f8"
+
+# std
+assert get_code("std") == "fd"
+
+# cld
+assert get_code("cld") == "fc"
+
+# syscall
+assert get_code("syscall") == "0f05"
