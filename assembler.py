@@ -1,5 +1,4 @@
 import logging as logger
-import pdb
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -1784,14 +1783,16 @@ assert get_code("ret 0x16") == "c21600"
 
 # push
 assert get_code("push r12") == "4154"
+
 assert get_code("push QWORD PTR [r10+r11*8]") == "43ff34da"
 
 # pop
 assert get_code("pop r12") == "415c"
 
+assert get_code("pop QWORD PTR [r12]") == "418f0424"
+
 assert get_code("pop rax") == "58"
 
-assert get_code("pop QWORD PTR [r12]") == "418f0424"
 
 # stc
 assert get_code("stc") == "f9"
