@@ -118,6 +118,17 @@ def is_hex(string: str):
     return string.startswith("0x")
 
 
+def hex_bin(string: Union[str, int]) -> str:
+    """converts 0xNUMBER to binary containing leading zeros"""
+    return bin(int("1" + str(string)[2:], 16))[3:]
+
+
+def print_binary_formatted(string: str):
+    return " ".join(
+        [string[::-1][i : i + 4] for i in range(0, len(string), 4)]
+    )[::-1]
+
+
 SIZE_PREFIX = 66
 ADDRESS_PREFIX = 67
 address_prefix_table = {
@@ -291,14 +302,6 @@ tttn_table = {
     "G": "1111",
     "NLE": "1111",
 }
-
-
-class MOD_16(Enum):
-
-    NO_DISP = "00"
-    DISP8 = "01"
-    DISP16 = "10"
-    REG_ADDR = "11"
 
 
 class MOD_32(Enum):
@@ -856,7 +859,7 @@ class Operand:
                 elif "WORD" in self._raw:
                     return 16
         if self.get_type() == OperandTypes.IMMEDIATE:
-            size = len(bin(int(self._raw, 16)))
+            size = len(hex_bin(self.get_value()))
             if size < 16:
                 return 16
             elif size <= 32:
@@ -929,10 +932,10 @@ class Operand:
         disp = self.get_disp()
         if disp is None:
             return 0
-        disp_size = len(bin(disp)) - 1
-        if disp_size <= 8:
+        disp_size = len(hex_bin(disp))
+        if disp <= 128:
             return 8
-        elif disp_size <= 32:
+        elif disp <= 4294967296:
             return 32
         else:
             raise RuntimeError(f"Unknown displacement size: {disp_size}")
@@ -1162,7 +1165,7 @@ def get_s(input: Input) -> Optional[int]:
     if not input.second_operand.get_type() == OperandTypes.IMMEDIATE:
         return None
 
-    imm_data_size = len(bin(input.second_operand.get_value()))
+    imm_data_size = len(hex_bin(input.second_operand.get_value()))
 
     if imm_data_size == 8 and input.first_operand.get_size() > 8:
         return 1
@@ -1418,51 +1421,29 @@ def get_data(input: Input) -> Optional[str]:
 
 
 def get_disp(input: Input) -> Optional[str]:
-    """Returns the displacement value"""
     to_code = select_operand_to_code_with_rm(input)
     if to_code is None:
         return None
-
     if to_code.get_type() != OperandTypes.MEMORY:
-        return
+        return None
 
-    if (
-        to_code.get_addressing_mode() == AddressingModes.DIRECT_ADDR_REGISTER
-        and to_code.get_registers_used()[0].endswith("bp")
-    ):
-        return f"{0:08b}"
+    base = to_code.get_base()
+    disp_value = to_code.get_disp()
+    disp_size = to_code.get_disp_size()
 
-    if to_code.get_addressing_mode() in [
-        AddressingModes.REG_INDIRECT_ADDR_INDEX,
-        AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX,
-    ]:
-        base = to_code.get_base()
-        if base is None:
+    if base is None:
+        if disp_value is None:
             return f"{0:032b}"
-        elif base.endswith("bp"):
+        else:
+            return f"{disp_value:032b}"
+
+    if disp_value is None:
+        if base.endswith("bp"):
             return f"{0:08b}"
         else:
             return
 
-    disp_value = to_code.get_disp()
-    if disp_value is None:
-        return
-
-    logger.debug("found disp in operand")
-
-    disp_size = len(bin(disp_value)) - 1
-
-    base = to_code.get_base()
-    # [0x55]
-    if base is None:
-        return f"{disp_value:032b}"
-    # [ebp + 0x55]
-    else:
-        if disp_size <= 8:
-            disp_size = 8
-        else:
-            disp_size = 32
-        return f"{disp_value:0{disp_size}b}"
+    return f"{disp_value:0{disp_size}b}"
 
 
 def get_r(input: Input) -> str:
@@ -1631,180 +1612,10 @@ def get_code(asm_instruction: str):
         print(f"data: {formatted}")
         result += formatted
 
-    print(f"before hex: {result}")
+    print(f"before hex: {print_binary_formatted(result)}")
     hex_value = hex(int("1" + result, 2))[3:]
     if prefix:
         hex_value = prefix + hex_value
     result = hex_value
     print(result)
     return result
-
-
-# mov
-assert get_code("mov al,bh") == "88f8"
-
-assert get_code("mov dl,bl") == "88da"
-
-assert get_code("mov ecx,eax") == "89c1"
-
-assert get_code("mov cl,al") == "88c1"
-
-assert get_code("mov cx,ax") == "6689c1"
-
-assert (get_code("mov dx,0x1352")) == "66ba5213"
-
-assert (get_code("mov dx,0x3545")) == "66ba4535"
-
-assert get_code("mov edx,DWORD PTR [eax+ecx*1]") == "678b1408"
-
-assert get_code("mov edx,DWORD PTR [eax+ecx*1+0x55]") == "678b540855"
-
-assert get_code("mov edx,DWORD PTR [ecx*4]") == "678b148d00000000"
-
-assert get_code("mov edx,DWORD PTR [ecx*4+0x06]") == "678b148d06000000"
-
-assert get_code("mov edx,DWORD PTR [ebp+ecx*4]") == "678b548d00"
-
-assert get_code("mov edx,DWORD PTR [ebx+ecx*4]") == "678b148b"
-
-assert get_code("mov edx,DWORD PTR [ebp+ecx*4+0x06]") == "678b548d06"
-
-assert (
-    get_code("mov edx,DWORD PTR [ebp+ecx*4+0x55555506]") == "678b948d06555555"
-)
-
-assert get_code("mov edx,DWORD PTR [0x5555551E]") == "8b14251e555555"
-
-
-# add
-assert (get_code("add ecx,eax")) == "01c1"
-
-assert get_code("add cx,ax") == "6601c1"
-
-assert get_code("adc dx,0x3545") == "6681d24535"
-
-assert get_code("add edi,DWORD PTR [ebx]") == "67033b"
-
-
-# test
-assert get_code("test r8d,edx") == "4185d0"
-
-assert get_code("test QWORD PTR [rbp+0x5555551e],r11") == "4c859d1e555555"
-
-assert get_code("test r11,QWORD PTR [rbp+0x5555551e]") == "4c859d1e555555"
-
-# imul
-assert get_code("imul r8w,WORD PTR [r14]") == "66450faf06"
-
-# xor
-assert get_code("xor r8b,BYTE PTR [rbp]") == "44324500"
-
-# xadd
-
-assert get_code("xadd QWORD PTR [rbx+0x5555551e],r10") == "4c0fc1931e555555"
-
-assert get_code("xadd QWORD PTR [rbx*1+0x1],r10") == "4c0fc1141d01000000"
-
-# bsf
-
-assert get_code("bsf r11,QWORD PTR [r8+r12*4+0x16]") == "4f0fbc5ca016"
-
-# bsr
-
-assert get_code("bsr r11,QWORD PTR [rbp+r12*1]") == "4e0fbd5c2500"
-
-# idiv
-assert get_code("idiv QWORD PTR [r11*4]") == "4af73c9d00000000"
-
-# jmp
-assert get_code("jmp r8") == "41ffe0"
-
-assert get_code("jmp QWORD PTR [r8]") == "41ff20"
-
-assert get_code("jmp QWORD PTR[r9+r12*8+0x5716]") == "43ffa4e116570000"
-
-# assert get_code("jo hello") == "0f8000000000"
-
-# cmp
-assert get_code("cmp r8,rdx") == "4939d0"
-
-# xchg
-
-assert get_code("xchg r11,QWORD PTR [rbp+0x5555551e]") == "4c879d1e555555"
-
-assert get_code("xchg QWORD PTR [rbp+0x5555551e],r11") == "4c879d1e555555"
-
-
-# sub
-assert get_code("sub DWORD PTR [ebp+ecx*4],edx") == "6729548d00"
-
-assert get_code("sub QWORD PTR [rbp+rcx*4],rdx") == "4829548d00"
-
-# sbb
-
-assert get_code("sbb QWORD PTR [rbp+rcx*4+0x94],rdx") == "4819948d94000000"
-
-# inc
-assert get_code("inc r10") == "49ffc2"
-
-# dec
-assert get_code("dec r10") == "49ffca"
-
-assert get_code("dec QWORD PTR [0x5555551e]") == "48ff0c251e555555"
-assert get_code("dec DWORD PTR [0x5555551e]") == "ff0c251e555555"
-
-# shl
-
-assert get_code("shl WORD PTR[eax+ecx*1+0x94],0x5") == "6766c1a4089400000005"
-
-assert get_code("shl QWORD PTR[r8d+r9d*1+0x94]") == "674bd1a40894000000"
-
-# assert get_code("shl rax,0x1") == "48d1e0"
-
-# shr
-
-assert get_code("shr QWORD PTR[rax+rcx*1+0x94],cl") == "48d3ac0894000000"
-
-# neg
-assert get_code("neg r11") == "49f7db"
-
-# not
-assert get_code("not QWORD PTR [r11]") == "49f713"
-
-# call
-assert get_code("call r9") == "41ffd1"
-
-assert get_code("call QWORD PTR [r9]") == "41ff11"
-
-assert get_code("ret") == "c2"
-
-assert get_code("ret 0x16") == "c21600"
-
-
-# push
-assert get_code("push r12") == "4154"
-
-assert get_code("push QWORD PTR [r10+r11*8]") == "43ff34da"
-
-# pop
-assert get_code("pop r12") == "415c"
-
-assert get_code("pop QWORD PTR [r12]") == "418f0424"
-
-assert get_code("pop rax") == "58"
-
-
-# stc
-assert get_code("stc") == "f9"
-
-# clc
-assert get_code("clc") == "f8"
-
-# std
-assert get_code("std") == "fd"
-
-# cld
-assert get_code("cld") == "fc"
-
-# syscall
-assert get_code("syscall") == "0f05"
