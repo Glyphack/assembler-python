@@ -1,6 +1,6 @@
 import re
 import sys
-from assembler import get_code, hex_bin, print_binary_formatted
+from assembler import get_code, hex_to_binary, print_binary_formatted
 
 import requests
 
@@ -50,6 +50,8 @@ two_operands = [
     "edx,DWORD PTR [ebx+ecx*4]",
     "edx,DWORD PTR [ebp+ecx*4+0x55555506]",
     "edx,DWORD PTR [ebp+ecx*4+0x06]",
+    # mem to eax(edge case)
+    "eax,DWORD PTR [ebp+ecx*4+0x06]",
     # imm to mem
     "WORD PTR[eax+ecx*1+0x94],0x5",
     # with 64 bit registers
@@ -76,6 +78,37 @@ two_operands = [
     "QWORD PTR [rbp+0x5555551e],r11",
     "QWORD PTR [rbx*1+0x1],r10",
 ]
+
+
+def run_test(test_cases, operation=None):
+    for test in test_cases:
+        if operation and not test.split(" ")[0] == operation:
+            continue
+        my_code = get_code(test)
+        from_site = get_answer_from_site(test)
+        if my_code != from_site:
+            print(f"wrong answer for {test}")
+            print(f"site: {from_site}")
+            print(f"my code: {my_code}")
+            print("BINARY")
+            print("g", print_binary_formatted(hex_to_binary("0x" + my_code)))
+            print("e", print_binary_formatted(hex_to_binary("0x" + from_site)))
+            sys.exit()
+
+
+test_cases = []
+# all two operands
+for ins in instructions:
+    for operand in two_operands:
+        test_cases.append(f"{ins} {operand}")
+
+# all one operands
+# no operands
+# run_test(test_cases, "mov")
+run_test(test_cases, "add")
+
+# run_test(test_cases)
+
 
 sample = [
     "mov WORD PTR[eax+ecx*1+0x94],0x5",
@@ -227,27 +260,3 @@ sample = [
     "cld",
     "syscall",
 ]
-
-
-def run_test(test_cases, operation=None):
-    for test in test_cases:
-        if operation and not test.split(" ")[0] == operation:
-            continue
-        my_code = get_code(test)
-        from_site = get_answer_from_site(test)
-        if my_code != from_site:
-            print(f"wrong answer for {test}")
-            print(f"site: {from_site}")
-            print(f"my code: {my_code}")
-            print("BINARY")
-            print("g", print_binary_formatted(hex_bin("0x" + my_code)))
-            print("e", print_binary_formatted(hex_bin("0x" + from_site)))
-            sys.exit()
-
-
-test_cases = []
-for ins in instructions:
-    for operand in two_operands:
-        test_cases.append(f"{ins} {operand}")
-run_test(test_cases, "mov")
-# run_test(test_cases, "add")
