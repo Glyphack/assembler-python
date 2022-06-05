@@ -375,46 +375,27 @@ class OpCode:
     opcode: str
     w: Optional[int] = None
     d: Optional[int] = None
-    flip_d: bool = False
-
-    # reg is hardcoded
     reg: Optional[str] = None
+    rm: Optional[str] = None
+    mod: Optional[MOD_32] = None
+    r: Optional[int] = None
+    x: Optional[int] = None
 
-    # which operand does rm codes
     rm_codes: Optional[int] = None
-
     reg_codes: Optional[int] = None
 
-    # do not calculate rm
-    rm: Optional[str] = None
-
-    # do not include rm in final code
     skip_prefix: bool = False
     skip_rex: bool = False
     skip_d: bool = False
     skip_s: bool = True
     skip_w: bool = False
+    skip_mod: bool = False
     skip_reg: bool = False
     skip_rm: bool = False
 
-    # do not calculate mod
-    mod: Optional[MOD_32] = None
-
-    # does not include mod in final code
-    skip_mod: bool = False
-
-    # no use
-    source_operand_number: Optional[int] = None
-    dest_operand_number: Optional[int] = None
-
     disp_size: Optional[int] = None
-
-    r: Optional[int] = None
-    x: Optional[int] = None
-
-    b_extends_reg: bool = False
-
     only_rex_new_register: bool = False
+    b_extends_reg: bool = False
 
 
 # Operation: Source: Destination
@@ -476,7 +457,9 @@ opcode_table: Dict[
             OperandTypes.IMMEDIATE: OpCode(opcode="111101", d=1),
         },
         OperandTypes.MEMORY: {
-            OperandTypes.REGISTER: OpCode(opcode="100001", d=0, flip_d=True),
+            OperandTypes.REGISTER: OpCode(
+                opcode="100001", d=0, rm_codes=2, reg_codes=1
+            ),
         },
     },
     "imul": {
@@ -497,28 +480,27 @@ opcode_table: Dict[
     "bsf": {
         OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(
-                opcode="00001111101111", d=0, w=0, flip_d=True
+                opcode="00001111101111", d=0, w=0, rm_codes=2, reg_codes=1
             ),
         }
     },
     "bsr": {
         OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(
-                opcode="00001111101111", d=0, w=1, flip_d=True
+                opcode="00001111101111", d=0, w=1, rm_codes=2, reg_codes=1
             ),
         },
-        # OperandTypes.REGISTER: {
-        #     OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=1),
-        #     OperandTypes.Memory: OpCode(
-        #         opcode="00001111101111", d=0, w=1, flip_d=True
-        #     ),
-        # },
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=1),
+            OperandTypes.MEMORY: OpCode(
+                opcode="00001111101111", d=0, w=1, reg_codes=1, rm_codes=2
+            ),
+        },
     },
     "idiv": {
         OperandTypes.MEMORY: {
             OperandTypes.NOT_EXIST: OpCode(
                 opcode="111101",
-                source_operand_number=1,
                 reg="111",
             )
         },
@@ -554,7 +536,9 @@ opcode_table: Dict[
             OperandTypes.REGISTER: OpCode(opcode="100001", d=1),
         },
         OperandTypes.REGISTER: {
-            OperandTypes.MEMORY: OpCode(opcode="100001", d=1, flip_d=True),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100001", d=1, rm_codes=1, reg_codes=2
+            ),
         },
     },
     "sub": {
@@ -591,21 +575,21 @@ opcode_table: Dict[
     "shr": {
         "cl": {
             OperandTypes.MEMORY: OpCode(
-                opcode="110100", reg="101", d=1, flip_d=True
+                opcode="110100", reg="101", d=1, rm_codes=1
             )
         }
     },
     "neg": {
         OperandTypes.NOT_EXIST: {
             OperandTypes.REGISTER: OpCode(
-                opcode="111101", d=1, reg="011", flip_d=True
+                opcode="111101", d=1, reg="011", rm_codes=1
             )
         }
     },
     "not": {
         OperandTypes.NOT_EXIST: {
             OperandTypes.MEMORY: OpCode(
-                opcode="111101", d=1, reg="010", flip_d=True
+                opcode="111101", d=1, reg="010", rm_codes=1
             )
         }
     },
@@ -1227,20 +1211,20 @@ def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
     op_code = get_opcode(input)
     d = get_d(input)
     src, dest = get_source_and_dest_operands(input)
-    if op_code.flip_d:
-        d = int(not d)
+    if op_code.rm_codes == 1:
+        to_code = dest
+    elif op_code.rm_codes == 2:
+        to_code = src
+    if to_code:
+        return to_code
     if d == 0:
         # rm codes the destination
         to_code = dest
     elif d == 1:
         # rm codes the source
         to_code = src
-
-    op_code = get_opcode(input)
-    if op_code.rm_codes == 1:
-        to_code = input.first_operand
-    elif op_code.rm_codes == 2:
-        to_code = input.second_operand
+    if to_code:
+        return to_code
     return to_code
 
 
@@ -1286,8 +1270,6 @@ def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
         return input.second_operand
 
     d = get_d(input)
-    if op_code.flip_d:
-        d = int(not d)
 
     if d == 0:
         return input.second_operand
