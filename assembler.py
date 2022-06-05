@@ -415,6 +415,9 @@ opcode_table: Dict[
                 opcode="100010",
                 d=0,
             ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100010",
+            ),
         },
         OperandTypes.IMMEDIATE: {
             OperandTypes.REGISTER: OpCode(
@@ -424,6 +427,12 @@ opcode_table: Dict[
                 skip_rm=True,
                 reg_codes=1,
             ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="110001",
+                d=1,
+                reg="000",
+                rm_codes=1,
+            ),
         },
         OperandTypes.MEMORY: {OperandTypes.REGISTER: OpCode(opcode="100010")},
     },
@@ -431,12 +440,33 @@ opcode_table: Dict[
         OperandTypes.REGISTER: {
             OperandTypes.REGISTER: OpCode(
                 opcode="000000",
-                d=0,
+                # d=0,
                 mod=MOD_32.REG_ADDR,
-            )
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="000000",
+            ),
         },
         OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(opcode="000000", d=1)
+        },
+        OperandTypes.IMMEDIATE: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="100000",
+                skip_d=True,
+                skip_s=False,
+                reg="000",
+                # check
+                rm_codes=1,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100000",
+                skip_d=True,
+                skip_s=False,
+                reg="000",
+                # check
+                rm_codes=1,
+            ),
         },
     },
     "adc": {
@@ -449,7 +479,27 @@ opcode_table: Dict[
                 reg="010",
                 rm_codes=1,
             ),
-        }
+            OperandTypes.MEMORY: OpCode(
+                opcode="100000",
+                skip_d=True,
+                skip_s=False,
+                reg="010",
+                rm_codes=1,
+            ),
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="000100",
+            ),
+        },
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="000100",
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="000100",
+            ),
+        },
     },
     "test": {
         OperandTypes.REGISTER: {
@@ -947,12 +997,12 @@ class Input:
             OperandTypes.MEMORY,
             OperandTypes.REGISTER,
         ]:
-            return self.first_operand.get_address_size()
+            return self.first_operand.get_operand_size()
         elif self.second_operand and self.second_operand.get_type() in [
             OperandTypes.MEMORY,
             OperandTypes.REGISTER,
         ]:
-            return self.second_operand.get_address_size()
+            return self.second_operand.get_operand_size()
         else:
             raise ValueError(f"No size for this operation {input}")
 
@@ -984,23 +1034,39 @@ def parse_instruction(instruction: str) -> Input:
     return Input(operation, first_operand, second_operand)
 
 
+def instruction_require_rex(input: Input) -> bool:
+    return operand_require_rex(input.first_operand) or operand_require_rex(
+        input.second_operand
+    )
+
+
 def operand_require_rex(operand: Operand) -> bool:
+    print(f"checking if {operand} requires rex")
     if operand.get_type() == OperandTypes.REGISTER:
         if operand.get_address_size() == 64 or operand.get_registers_used()[
             0
         ].startswith("r"):
+            print(
+                "require rex because operand with size 64 or a new operand is used"
+            )
             return True
     elif operand.get_type() == OperandTypes.MEMORY:
-        for reg in operand.get_registers_used():
-            if get_register_size(reg) == 64 or reg.startswith("r"):
-                return True
         if operand.get_operand_size() == 64:
+            print("require rex because operand with size 64 is used")
             return True
+        for reg in operand.get_registers_used():
+            if reg.startswith("r") and reg[1].isnumeric():
+                print(
+                    "require rex because a new operand is used in memory addressing"
+                )
+                return True
     return False
 
 
 def get_prefix(input: Input) -> Optional[str]:
+    print("checking if prefix is required")
     if get_opcode(input).skip_prefix:
+        print("prefix is not required for this opcode")
         return None
     dest = input.second_operand
     src = input.first_operand
@@ -1016,6 +1082,8 @@ def get_prefix(input: Input) -> Optional[str]:
         ]:
             size = operand.get_operand_size()
         elif operand.get_type() == OperandTypes.MEMORY:
+            if operand.get_operand_size() > size:
+                size = operand.get_operand_size()
             address = operand.get_address_size()
             if (
                 operand.get_addressing_mode()
@@ -1121,9 +1189,8 @@ def get_s(input: Input) -> Optional[int]:
     if not input.second_operand.get_type() == OperandTypes.IMMEDIATE:
         return None
 
-    imm_data_size = len(hex_bin(input.second_operand.get_value()))
-
-    if imm_data_size == 8 and input.first_operand.get_address_size() > 8:
+    imm_data_size = len(hex_bin(hex(input.second_operand.get_value())))
+    if imm_data_size > 8:
         return 1
 
     return 0
@@ -1156,6 +1223,7 @@ def get_mod(input: Input) -> Optional[MOD_32]:
     base = to_code.get_base()
     disp = to_code.get_disp()
     if to_code.get_type() == OperandTypes.REGISTER:
+        print(f"mod is register addressing")
         return MOD_32.REG_ADDR
 
     if addr_mod in [
@@ -1163,17 +1231,20 @@ def get_mod(input: Input) -> Optional[MOD_32]:
         AddressingModes.REG_INDIRECT_ADDR_INDEX,
         AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP,
     ]:
+        print("mod uses sib")
         return MOD_32.SIB
 
     if base is not None and disp is None:
         if base.endswith("bp"):
+            print("mod is disp8 because base is bp and disp is empty")
             return MOD_32.DISP8
         if addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX:
+            print("mod is sib because base is not bp and disp is empty")
             return MOD_32.SIB
         return MOD_32.NO_DISP
 
     if addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_DISP:
-        if operand_require_rex(to_code):
+        if instruction_require_rex(input):
             return MOD_32.get_mod_by_size(to_code.get_disp_size())
         return MOD_32.SIB
 
@@ -1196,6 +1267,8 @@ def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
 def get_rm(input: Input):
     if get_opcode(input).skip_rm:
         return None
+    if get_opcode(input).rm:
+        return get_opcode(input).rm
     to_code = select_operand_to_code_with_rm(input)
     if to_code is None:
         raise RuntimeError
@@ -1234,6 +1307,11 @@ def select_operand_to_code_with_reg(input: Input) -> Optional[Operand]:
         return input.second_operand
     elif get_d(input) == 1:
         return input.first_operand
+
+    if input.first_operand.get_type() is OperandTypes.REGISTER:
+        return input.first_operand
+    else:
+        return input.second_operand
 
 
 def get_reg(input: Input) -> Optional[str]:
@@ -1282,11 +1360,9 @@ def get_base(operand: Operand) -> str:
     if operand_require_rex(operand):
         if base_specified is None:
             base_specified = "rbp"
-        return register_table_64[base_specified][1:]
     if base_specified is None:
         base_specified = "ebp"
-
-    return register_code_table_32[base_specified]
+    return register_table_64[base_specified][1:]
 
 
 def has_sib(input: Input) -> bool:
@@ -1321,16 +1397,22 @@ def get_sib(input: Input) -> Optional[str]:
 
 def get_data(input: Input) -> Optional[str]:
     imm_val_op = None
+    other_op = None
     for op in [input.first_operand, input.second_operand]:
         if op and op.get_type() == OperandTypes.IMMEDIATE:
             imm_val_op = op
+        else:
+            other_op = op
     if imm_val_op is None:
         return
+    if other_op is None:
+        raise RuntimeError("No other operand")
+
     value = imm_val_op.get_value()
     real_value = hex_bin(hex(value))
-    size = len(real_value)
-    if size < 8:
-        size = 8
+    size = other_op.get_operand_size()
+    if size > 16:
+        size = 32
     if get_opcode(input).disp_size:
         size = get_opcode(input).disp_size
     return format(
@@ -1482,6 +1564,7 @@ def get_code(asm_instruction: str):
 
     if not op_code.skip_s:
         s = get_s(input)
+        print("s:", s)
         result += str(s)
 
     w = get_code_w(input)
