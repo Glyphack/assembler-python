@@ -790,11 +790,8 @@ class Operand:
         )
 
     def get_addressing_mode(self) -> AddressingModes:
-        """
-        = 7
-        """
-        if "PTR" in self._raw:
-            address = self._get_address()
+        address = self._get_address()
+        if address:
             if is_register(address):
                 return AddressingModes.DIRECT_ADDR_REGISTER
             elif is_hex(address):
@@ -839,7 +836,7 @@ class Operand:
         else:
             raise ValueError(f"Unknown addressing mode {self._raw}")
 
-    def get_size(self) -> int:
+    def get_address_size(self) -> int:
         if self.get_type() == OperandTypes.REGISTER:
             return get_register_size(self._raw)
 
@@ -847,17 +844,9 @@ class Operand:
             reg = self.get_registers_used()
             if reg:
                 return get_register_size(reg[0])
+            else:
+                return 64
 
-            # REMOVE
-            if self.get_addressing_mode() == AddressingModes.DIRECT_ADDR_VALUE:
-                if "BYTE" in self._raw:
-                    return 8
-                elif "QWORD" in self._raw:
-                    return 64
-                elif "DWORD" in self._raw:
-                    return 32
-                elif "WORD" in self._raw:
-                    return 16
         if self.get_type() == OperandTypes.IMMEDIATE:
             size = len(hex_bin(self.get_value()))
             if size < 16:
@@ -895,7 +884,8 @@ class Operand:
         raise NotImplementedError(f"Unknown operand type {self._raw}")
 
     def get_base(self) -> Optional[str]:
-        if self.get_addressing_mode() not in [
+        address = self._get_address()
+        if not address or self.get_addressing_mode() not in [
             AddressingModes.REG_INDIRECT_ADDR_BASE_DISP,
             AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX,
             AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP,
@@ -903,10 +893,12 @@ class Operand:
         ]:
             return None
 
-        return self._get_address().split("+")[0]
+        return address.split("+")[0]
 
     def get_index(self) -> Optional[str]:
         addr = self._get_address()
+        if addr is None:
+            return
         components = addr.split("+")
         for comp in components:
             if "*" in comp:
@@ -915,6 +907,8 @@ class Operand:
 
     def get_scale(self) -> Optional[int]:
         addr = self._get_address()
+        if addr is None:
+            return
         components = addr.split("+")
         for comp in components:
             if "*" in comp:
@@ -923,6 +917,8 @@ class Operand:
 
     def get_disp(self) -> Optional[int]:
         addr = self._get_address()
+        if addr is None:
+            return
         components = addr.split("+")
         for comp in components:
             if comp.startswith("0x"):
@@ -940,8 +936,9 @@ class Operand:
         else:
             raise RuntimeError(f"Unknown displacement size: {disp_size}")
 
-    def _get_address(self) -> str:
-        return self._raw.split("[")[1].removesuffix("]")
+    def _get_address(self) -> Optional[str]:
+        if self.get_type() == OperandTypes.MEMORY:
+            return self._raw.split("[")[1].removesuffix("]")
 
 
 @dataclass
@@ -959,12 +956,12 @@ class Input:
             OperandTypes.MEMORY,
             OperandTypes.REGISTER,
         ]:
-            return self.first_operand.get_size()
+            return self.first_operand.get_address_size()
         elif self.second_operand and self.second_operand.get_type() in [
             OperandTypes.MEMORY,
             OperandTypes.REGISTER,
         ]:
-            return self.second_operand.get_size()
+            return self.second_operand.get_address_size()
         else:
             raise ValidationErr(f"No size for this operation {input}")
 
@@ -1029,7 +1026,7 @@ def parse_instruction(instruction: str) -> Input:
 def operand_require_rex(operand: Operand) -> bool:
     """Checks if the operand requires the rex prefix"""
     if operand.get_type() == OperandTypes.REGISTER:
-        if operand.get_size() == 64 or operand.get_registers_used()[
+        if operand.get_address_size() == 64 or operand.get_registers_used()[
             0
         ].startswith("r"):
             return True
@@ -1037,7 +1034,7 @@ def operand_require_rex(operand: Operand) -> bool:
         for reg in operand.get_registers_used():
             if get_register_size(reg) == 64 or reg.startswith("r"):
                 return True
-        if operand.get_size() == 64:
+        if operand.get_operand_size() == 64:
             return True
     return False
 
@@ -1057,9 +1054,9 @@ def get_prefix(input: Input) -> Optional[str]:
             OperandTypes.IMMEDIATE,
             OperandTypes.REGISTER,
         ]:
-            size = operand.get_size()
+            size = operand.get_operand_size()
         elif operand.get_type() == OperandTypes.MEMORY:
-            address = operand.get_size()
+            address = operand.get_address_size()
             if (
                 operand.get_addressing_mode()
                 == AddressingModes.DIRECT_ADDR_VALUE
@@ -1167,7 +1164,7 @@ def get_s(input: Input) -> Optional[int]:
 
     imm_data_size = len(hex_bin(input.second_operand.get_value()))
 
-    if imm_data_size == 8 and input.first_operand.get_size() > 8:
+    if imm_data_size == 8 and input.first_operand.get_address_size() > 8:
         return 1
 
     return 0
@@ -1188,46 +1185,41 @@ def get_code_w(input: Input):
 
 
 def get_mod(input: Input) -> Optional[MOD_32]:
-    """Returns the MOD/RM value"""
-    op_code = get_opcode(input)
-    if op_code.mod is not None:
-        return op_code.mod
+    if get_opcode(input).mod is not None:
+        return get_opcode(input).mod
 
     to_code = select_operand_to_code_with_rm(input)
 
     if to_code is None:
-        raise RuntimeError(f"No operand to code")
+        raise ValueError(f"No operand to code")
 
-    if to_code.get_type() == OperandTypes.MEMORY:
-        addr_mod = to_code.get_addressing_mode()
-        if addr_mod in [
-            AddressingModes.DIRECT_ADDR_VALUE,
-            AddressingModes.REG_INDIRECT_ADDR_INDEX,
-        ]:
-            return MOD_32.SIB
-        elif addr_mod == AddressingModes.DIRECT_ADDR_REGISTER:
-            if to_code.get_registers_used()[0].endswith("bp"):
-                return MOD_32.DISP8
-            return MOD_32.SIB
-        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX:
-            if to_code.get_base().endswith("bp"):
-                return MOD_32.DISP8
-            return MOD_32.SIB
-        elif addr_mod in [
-            AddressingModes.REG_INDIRECT_ADDR_BASE_DISP,
-        ]:
-            if operand_require_rex(to_code):
-                return MOD_32.get_mod_by_size(to_code.get_disp_size())
-            return MOD_32.SIB
-        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP:
-            return MOD_32.get_mod_by_size(to_code.get_disp_size())
-        elif addr_mod == AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP:
-            return MOD_32.SIB
-
-    elif to_code.get_type() == OperandTypes.REGISTER:
+    addr_mod = to_code.get_addressing_mode()
+    base = to_code.get_base()
+    disp = to_code.get_disp()
+    if to_code.get_type() == OperandTypes.REGISTER:
         return MOD_32.REG_ADDR
-    else:
-        raise NotImplementedError(f"Unknown operand type: {to_code}")
+
+    if addr_mod in [
+        AddressingModes.DIRECT_ADDR_VALUE,
+        AddressingModes.REG_INDIRECT_ADDR_INDEX,
+        AddressingModes.REG_INDIRECT_ADDR_INDEX_DISP,
+    ]:
+        return MOD_32.SIB
+
+    if base is not None and disp is None:
+        if base.endswith("bp"):
+            return MOD_32.DISP8
+        if addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX:
+            return MOD_32.SIB
+        return MOD_32.NO_DISP
+
+    if addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_DISP:
+        if operand_require_rex(to_code):
+            return MOD_32.get_mod_by_size(to_code.get_disp_size())
+        return MOD_32.SIB
+
+    if addr_mod == AddressingModes.REG_INDIRECT_ADDR_BASE_INDEX_DISP:
+        return MOD_32.get_mod_by_size(to_code.get_disp_size())
 
 
 def select_operand_to_code_with_rm(input: Input) -> Optional[Operand]:
@@ -1489,7 +1481,7 @@ def get_b(input: Input) -> str:
     if base is not None:
         return register_table_64[base][0]
     else:
-        if op.get_size() == 64:
+        if op.get_address_size() == 64:
             return register_table_64["rbp"][0]
         return register_table_64["ebp"][0]
 

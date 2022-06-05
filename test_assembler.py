@@ -54,6 +54,8 @@ assert get_code("test QWORD PTR [rbp+0x5555551e],r11") == "4c859d1e555555"
 
 assert get_code("test r11,QWORD PTR [rbp+0x5555551e]") == "4c859d1e555555"
 
+assert get_code("test QWORD PTR [ebp+0x5555551e],r11") == "674c859d1e555555"
+
 # imul
 assert get_code("imul r8w,WORD PTR [r14]") == "66450faf06"
 
@@ -112,6 +114,7 @@ assert get_code("inc r10") == "49ffc2"
 assert get_code("dec r10") == "49ffca"
 
 assert get_code("dec QWORD PTR [0x5555551e]") == "48ff0c251e555555"
+assert get_code("dec QWORD PTR [0x20]") == "48ff0c2520000000"
 assert get_code("dec DWORD PTR [0x5555551e]") == "ff0c251e555555"
 
 # shl
