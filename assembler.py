@@ -114,7 +114,7 @@ def is_hex(string: str):
     return string.startswith("0x")
 
 
-def hex_bin(string: Union[str, int]) -> str:
+def hex_to_binary(string: Union[str, int]) -> str:
     """converts 0xNUMBER to binary containing leading zeros"""
     return bin(int("1" + str(string)[2:], 16))[3:]
 
@@ -470,6 +470,14 @@ opcode_table: Dict[
         },
     },
     "adc": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="000100",
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="000100",
+            ),
+        },
         OperandTypes.IMMEDIATE: {
             OperandTypes.REGISTER: OpCode(
                 opcode="100000",
@@ -489,14 +497,6 @@ opcode_table: Dict[
         },
         OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(
-                opcode="000100",
-            ),
-        },
-        OperandTypes.REGISTER: {
-            OperandTypes.REGISTER: OpCode(
-                opcode="000100",
-            ),
-            OperandTypes.MEMORY: OpCode(
                 opcode="000100",
             ),
         },
@@ -892,7 +892,7 @@ class Operand:
                 return 64
 
         if self.get_type() == OperandTypes.IMMEDIATE:
-            size = len(hex_bin(self.get_value()))
+            size = len(hex_to_binary(self.get_value()))
             if size < 16:
                 return 16
             elif size <= 32:
@@ -971,7 +971,7 @@ class Operand:
         disp = self.get_disp()
         if disp is None:
             return 0
-        disp_size = len(hex_bin(disp))
+        disp_size = len(hex_to_binary(disp))
         if disp <= 128:
             return 8
         elif disp <= 4294967296:
@@ -1181,7 +1181,6 @@ def get_d(input: Input) -> Optional[int]:
 
 
 def get_s(input: Input) -> Optional[int]:
-    """Returns the s bit"""
     if get_opcode(input).skip_s:
         return None
     if not input.second_operand or not input.first_operand:
@@ -1189,10 +1188,10 @@ def get_s(input: Input) -> Optional[int]:
     if not input.second_operand.get_type() == OperandTypes.IMMEDIATE:
         return None
 
-    imm_data_size = len(hex_bin(hex(input.second_operand.get_value())))
-    if imm_data_size > 8:
+    imm_data_size = len(hex_to_binary(hex(input.second_operand.get_value())))
+    print(f"immediate data size is {imm_data_size}")
+    if imm_data_size < 8:
         return 1
-
     return 0
 
 
@@ -1407,14 +1406,24 @@ def get_data(input: Input) -> Optional[str]:
         return
     if other_op is None:
         raise RuntimeError("No other operand")
-
+    print(f"coding immediate data {imm_val_op}")
     value = imm_val_op.get_value()
-    real_value = hex_bin(hex(value))
+    real_value = hex_to_binary(hex(value))
     size = other_op.get_operand_size()
+    real_value_size = len(real_value)
     if size > 16:
+        print(
+            f"immediate data is used with {size} bits operand extended to 32"
+        )
         size = 32
     if get_opcode(input).disp_size:
+        print(
+            f"this operand codes immediate data  with {get_opcode(input).disp_size} bits displacement"
+        )
         size = get_opcode(input).disp_size
+    if real_value_size <= 8:
+        print(f"immediate data is small enough use 8 bit displacement")
+        size = 8
     return format(
         int(real_value, 2),
         f"0{size}b",
