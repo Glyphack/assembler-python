@@ -589,6 +589,7 @@ opcode_table: Dict[
                 rm_codes=1,
                 rex_w=0,
                 prefix_smaller_than_64_operands=True,
+                only_rex_new_register=True,
             ),
             OperandTypes.MEMORY: OpCode(
                 opcode="111111",
@@ -837,7 +838,14 @@ opcode_table: Dict[
         OperandTypes.NOT_EXIST: {
             OperandTypes.MEMORY: OpCode(
                 opcode="111101", d=1, reg="010", rm_codes=1
-            )
+            ),
+            OperandTypes.REGISTER: OpCode(
+                opcode="111101",
+                d=1,
+                reg="010",
+                mod=MOD_32.REG_ADDR,
+                rm_codes=1,
+            ),
         }
     },
     "ret": {
@@ -881,7 +889,13 @@ opcode_table: Dict[
                 rex_w=0,
             ),
             OperandTypes.MEMORY: OpCode(
-                opcode="111111", d=1, w=1, reg="110", rm_codes=1, rex_w=0
+                opcode="111111",
+                d=1,
+                w=1,
+                reg="110",
+                rm_codes=1,
+                rex_w=0,
+                only_rex_new_register=True,
             ),
         }
     },
@@ -899,7 +913,13 @@ opcode_table: Dict[
                 rex_w=0,
             ),
             OperandTypes.MEMORY: OpCode(
-                opcode="100011", d=1, w=1, reg="000", rm_codes=1, rex_w=0
+                opcode="100011",
+                d=1,
+                w=1,
+                reg="000",
+                rm_codes=1,
+                rex_w=0,
+                only_rex_new_register=True,
             ),
         }
     },
@@ -1181,6 +1201,14 @@ class Input:
             raise ValueError(f"No size for this operation {input}")
 
 
+def adjust_operands(operand: Operand):
+    if "[r13" in operand._raw and operand.get_disp() is None:
+        print("added a 0 displacement because r13 is base")
+        return Operand(operand._raw.replace("]", "+0x0]"))
+
+    return operand
+
+
 def parse_instruction(instruction: str) -> Input:
     operation = instruction.split(" ")[0]
 
@@ -1195,10 +1223,12 @@ def parse_instruction(instruction: str) -> Input:
         first_operand = None
     else:
         first_operand = Operand(first_operand)
+        first_operand = adjust_operands(first_operand)
 
     if cursor + 1 < len(instruction):
         second_operand = instruction[cursor + 1 :].strip()
         second_operand = Operand(second_operand)
+        second_operand = adjust_operands(second_operand)
     else:
         second_operand = None
 
@@ -1295,7 +1325,12 @@ def get_source_and_dest_operands(
     dest = input.first_operand
     src = input.second_operand
 
-    if input.operation in ["idiv", "jmp", "inc", "dec"]:
+    if input.operation in [
+        "idiv",
+        "jmp",
+        "inc",
+        "dec",
+    ]:
         src = input.first_operand
         return src, None
 
@@ -1606,7 +1641,7 @@ def get_imm_data_size(input: Input) -> Optional[int]:
     if imm_data_op == other_op:
         other_op = input.second_operand
     if other_op is None:
-        raise NotImplementedError()
+        other_op = input.first_operand
     other_op_size = other_op.get_operand_size()
     size = other_op_size
     value = imm_data_op.get_value()
@@ -1635,16 +1670,11 @@ def get_imm_data_size(input: Input) -> Optional[int]:
 
 def get_data(input: Input) -> Optional[str]:
     imm_val_op = None
-    other_op = None
     for op in [input.first_operand, input.second_operand]:
         if op and op.get_type() == OperandTypes.IMMEDIATE:
             imm_val_op = op
-        else:
-            other_op = op
     if imm_val_op is None:
         return
-    if other_op is None:
-        raise RuntimeError("No other operand")
     print(f"coding immediate data {imm_val_op}")
     value = imm_val_op.get_value()
     real_value = hex_to_binary(hex(value))
@@ -1853,3 +1883,6 @@ def get_code(asm_instruction: str):
     result = hex_value
     print(result)
     return result
+
+
+print(get_code("not QWORD PTR [r13]"))

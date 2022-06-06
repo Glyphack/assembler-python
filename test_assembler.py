@@ -1,15 +1,24 @@
 import asyncio
+import json
 import aiohttp
 import re
 import sys
+import os
 from assembler import get_code, hex_to_binary, print_binary_formatted
 
 import urllib.parse
 
+cache = {}
+
+with open("cache", "r+") as cache_file:
+    if os.stat("cache").st_size != 0:
+        cache = json.loads(cache_file.read())
+
 
 async def get_answer_from_site(input, session):
     url = "https://defuse.ca/online-x86-assembler.htm"
-
+    if cache.get(input):
+        return cache.get(input)
     payload = (
         f"instructions={urllib.parse.quote(input)}&arch=x64&submit=Assemble"
     )
@@ -26,6 +35,7 @@ async def get_answer_from_site(input, session):
         answer = re.findall(r"\d:\s&nbsp;([\w\s]+)\s", text)
         result = "".join(answer)
         result = result.replace(" ", "").strip()
+        cache[input] = result
         return result
 
 
@@ -123,6 +133,7 @@ mem_to_reg_operands = [
     "r12,QWORD PTR [rbx+r13*1]",
     "r12,QWORD PTR [rbx+r13*1+0x48]",
     "r12,QWORD PTR [rbp+r12*1]",
+    "r12,QWORD PTR [r13+r12*1]",
 ]
 
 
@@ -145,6 +156,10 @@ single_operands = [
     "QWORD PTR [r12*4]",
     "QWORD PTR [r9+r12*8]",
     "QWORD PTR [r10+r11*8]",
+    "r13",
+    "QWORD PTR [rbp+r12*8+0x45]",
+    "rdx",
+    "QWORD PTR [r13]",
 ]
 
 bsf_bsr = [
@@ -177,14 +192,17 @@ one_operand_instructions = [
     "inc",
     "idiv",
     "jmp",
-    # "ret",
-    # "not",
+    "push",
+    "pop",
+    "not",
     # "neg",
     # "shl",
     # "shr",
 ]
 
-test_cases = []
+test_cases = [
+    "ret 0x5",
+]
 # normal two operands
 for ins in instructions:
     for operand in two_operands:
@@ -214,9 +232,13 @@ test_cases.extend(["stc", "clc", "std", "cld", "syscall", "ret"])
 # all one operands
 # no operands
 
-# asyncio.run(run_test(test_cases, "add"))
+# asyncio.run(run_test(test_c   ases, "not"))
 
 asyncio.run(run_test(test_cases))
+
+with open("cache", "w") as cache_file:
+    json.dump(cache, cache_file)
+
 sample = [
     "mov WORD PTR[eax+ecx*1+0x94],0x5",
     "mov r11,QWORD PTR [r8+r12*4+0x16]",
