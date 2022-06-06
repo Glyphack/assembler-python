@@ -4,7 +4,7 @@ import aiohttp
 import re
 import sys
 import os
-from assembler import get_code, hex_to_binary, print_binary_formatted
+from assembler import get_code, hex_to_binary, get_binary_formatted
 
 import urllib.parse
 
@@ -15,10 +15,15 @@ with open("cache", "r+") as cache_file:
         cache = json.loads(cache_file.read())
 
 
+def end():
+    with open("cache", "w") as cache_file:
+        json.dump(cache, cache_file)
+    sys.exit()
+
+
 async def get_answer_from_site(input, session):
     url = "https://defuse.ca/online-x86-assembler.htm"
-    if cache.get(input):
-        return cache.get(input)
+
     payload = (
         f"instructions={urllib.parse.quote(input)}&arch=x64&submit=Assemble"
     )
@@ -35,7 +40,6 @@ async def get_answer_from_site(input, session):
         answer = re.findall(r"\d:\s&nbsp;([\w\s]+)\s", text)
         result = "".join(answer)
         result = result.replace(" ", "").strip()
-        cache[input] = result
         return result
 
 
@@ -44,23 +48,27 @@ async def run_test(test_cases, operation=None):
         for test in test_cases:
             if operation and not test.split(" ")[0] == operation:
                 continue
-            my_code = get_code(test)
-            from_site = await get_answer_from_site(test, session)
-            if not from_site:
+            from_site = cache.get(test)
+            if from_site == "invalid":
                 continue
+            if not from_site:
+                from_site = await get_answer_from_site(test, session)
+            if not from_site:
+                cache[test] = "invalid"
+                continue
+            cache[test] = from_site
+            my_code = get_code(test)
             if my_code != from_site:
                 print(f"wrong answer for {test}")
                 print(f"site: {from_site}")
                 print(f"my code: {my_code}")
                 print("BINARY")
-                print(
-                    "g", print_binary_formatted(hex_to_binary("0x" + my_code))
-                )
+                print("g", get_binary_formatted(hex_to_binary("0x" + my_code)))
                 print(
                     "e",
-                    print_binary_formatted(hex_to_binary("0x" + from_site)),
+                    get_binary_formatted(hex_to_binary("0x" + from_site)),
                 )
-                sys.exit()
+                end()
 
 
 reg_to_reg_operands = [
@@ -70,20 +78,39 @@ reg_to_reg_operands = [
     "cl,al",
     "cx,ax",
     "ecx,eax",
+    "ecx,edi",
+    "dx,bp",
+    "r8,rdx",
+    "r8d,edx",
+    "r8w,bx" "r9b,cl",
 ]
 reg_to_mem_operands = [
     "BYTE PTR[rax+rcx*1+0x94],cl",
     "QWORD PTR [rbx+0x5555551e],r10",
     "QWORD PTR [rbp+0x5555551e],r11",
+    "QWORD PTR [rbp+0x5555551e],r12",
     "QWORD PTR [rbx*1+0x1],r10",
     "QWORD PTR [ebp+0x5555551e],r11",
     "QWORD PTR [rax+rcx*1+0x94],rcx",
     "DWORD PTR [ecx*4],ebx",
+    "QWORD PTR [rbx+rcx*1+0x94],cl",
+    "DWORD PTR [edi+0x5126],eax",
+    "DWORD PTR [eax+ecx*1],esi",
+    "DWORD PTR [rax+rcx*1],esi",
+    "DWORD PTR [ecx*4],ebx",
+    "DWORD PTR [ebp+ecx*4+0x65],ebx",
+    "DWORD PTR [ebp+ecx*4],ebx",
+    "DWORD PTR [ebp+ecx*4+0x65127698],ebx",
+    "QWORD PTR [rbp+0x5555551E],r12",
+    "QWORD PTR [rdx+0x5555551E],r11",
 ]
 imm_to_reg_operands = [
     # imm to reg
     "dx,0x1352",
     "dx,0x3545",
+    "dx,0x7891",
+    "di,0x1543",
+    "r12,0x1234"
     # "rax,0x60",
     # "rax,0x95",
     # "rax,0x94",
@@ -98,21 +125,33 @@ imm_to_mem_operands = [
     "WORD PTR [eax+ecx*1+0x94],0x5",
     "QWORD PTR [eax+ecx*1+0x94],0x5",
     "QWORD PTR [rcx*4+0x8],0x34",
+    "WORD PTR [eax+ecx*1+0x94],0x5",
+    "QWORD PTR [r8d+r9d*1+0x94],0x1",
 ]
 mem_to_reg_operands = [
     # mem to reg
     "edx,DWORD PTR [ecx*4]",
     "edi,DWORD PTR [ebx]",
+    "edi,DWORD PTR [edi+0x51]",
     "edx,DWORD PTR [ebp+ecx*4]",
     "edx,DWORD PTR [eax+ecx*1+0x55]",
+    "ebx,DWORD PTR [ebp+0x54321768]",
     "edx,DWORD PTR [eax+ecx*1]",
     "edx,DWORD PTR [0x5555551E]",
     "edx,DWORD PTR [ecx*4+0x06]",
     "edx,DWORD PTR [ebx+ecx*4]",
     "edx,DWORD PTR [ebp+ecx*4+0x55555506]",
     "edx,DWORD PTR [ebp+ecx*4+0x06]",
+    "edx,DWORD PTR [ebp]",
+    "edx,DWORD PTR[ebp+ecx*1]",
+    "ebx,DWORD PTR[ebx+esp*1+0x54]",
+    "ebx,DWORD PTR[ebx+esp*1+d1]",
+    "ebx,DWORD PTR[rbx+rsp*1+0x54]",
+    "edx,DWORD PTR[ebx+ecx*4]",
+    "edx,DWORD PTR[ecx*4+0x32]",
     # mem to eax(edge case)
     "eax,DWORD PTR [ebp+ecx*4+0x06]",
+    "r9b,BYTE PTR [rbp]",
     "rdx,QWORD PTR [rcx*4]",
     "rdi,QWORD PTR [rbx]",
     "rdx,QWORD PTR [ebp+ecx*4]",
@@ -134,6 +173,7 @@ mem_to_reg_operands = [
     "r12,QWORD PTR [rbx+r13*1+0x48]",
     "r12,QWORD PTR [rbp+r12*1]",
     "r12,QWORD PTR [r13+r12*1]",
+    "r9w,WORD PTR[r14]",
 ]
 
 
@@ -158,6 +198,7 @@ single_operands = [
     "QWORD PTR [r10+r11*8]",
     "r13",
     "QWORD PTR [rbp+r12*8+0x45]",
+    "QWORD PTR [r9+r13*8+0x9876]",
     "rdx",
     "QWORD PTR [r13]",
 ]
@@ -175,33 +216,57 @@ instructions = [
     "mov",
     "add",
     "adc",
+    "sub",
+    "sbb",
     "and",
-    "cmp",
     "or",
-    # "shl",
-    # "shr",
-    # "test",
-    # "xor",
-    # "sub",
-    # "sbb",
+    "xor",
+    "cmp",
+    "test",
+    "xchg",
+    "xadd",
+    "shl",
+    "shr",
 ]
 
 one_operand_instructions = [
-    "call",
     "dec",
     "inc",
     "idiv",
     "jmp",
+    # "jcc"
+    "neg",
+    "not",
+    "call" "shl",
+    "shr",
     "push",
     "pop",
-    "not",
-    # "neg",
-    # "shl",
-    # "shr",
 ]
 
 test_cases = [
     "ret 0x5",
+    "ret 0x90",
+    "stc",
+    "clc",
+    "std",
+    "cld",
+    "syscall",
+    "ret",
+    "jmp end",
+    # "ja end",
+    # "jae end",
+    # "jc l2",
+    # "jnc end",
+    # "jp end",
+    # "jns end",
+    # "jnae end",
+    # "jnge end",
+    # "jl l2",
+    # "jnl l2 ",
+    # "jg end",
+    # "jle end",
+    # "jrcxz l1",
+    # "jrcxz l2",
 ]
 # normal two operands
 for ins in instructions:
@@ -215,7 +280,7 @@ for ins in instructions:
             continue
         test_cases.append(f"{ins} {operand}")
 
-# bsf, bsr two operands
+# bsf,bsr two operands
 for ins in ["bsf", "bsr"]:
     for operand in bsf_bsr:
         test_cases.append(f"{ins} {operand}")
@@ -227,17 +292,12 @@ for ins in one_operand_instructions:
 for operand in imul_cases:
     test_cases.append(f"imul {operand}")
 
-test_cases.extend(["stc", "clc", "std", "cld", "syscall", "ret"])
-
 # all one operands
 # no operands
 
-# asyncio.run(run_test(test_c   ases, "not"))
+# asyncio.run(run_test(test_c   ases,"not"))
 
 asyncio.run(run_test(test_cases))
-
-with open("cache", "w") as cache_file:
-    json.dump(cache, cache_file)
 
 sample = [
     "mov WORD PTR[eax+ecx*1+0x94],0x5",
@@ -389,4 +449,93 @@ sample = [
     "std",
     "cld",
     "syscall",
+    "stc",
+    "clc",
+    "std",
+    "cld",
+    "mov al,bh",
+    "mov di,0x1543",
+    "add dx,bp",
+    "adc ecx,edi",
+    "add dx,0x7891",
+    "add edi,DWORD PTR[ebx]",
+    "adc edi,DWORD PTR[edi+0x51]",
+    "adc DWORD PTR[edi+0x5126],eax",
+    "adc DWORD PTR[edi+ecx*1],eax",
+    "adc DWORD PTR[rdi+0x5126],ax",
+    "mov ebx,DWORD PTR[ebp+0x54321768]",
+    "add edx,DWORD PTR[ebp]",
+    "add DWORD PTR[eax+ecx*1],esi",
+    "add DWORD PTR[rax+rcx*1],esi",
+    "sub edx,DWORD PTR[ebp+ecx*1]",
+    "and ebx,DWORD PTR[ebx+esp*1+0x54]",
+    "and ebx,DWORD PTR[ebx+esp*1+d1]",
+    "mov ebx,DWORD PTR[rbx+rsp*1+0x54]",
+    "mov edx,DWORD PTR[ebx+ecx*4]",
+    "mov edx,DWORD PTR[ecx*4+0x32]",
+    "or  DWORD PTR[ecx*4],ebx",
+    "mov DWORD PTR[ebp+ecx*4+0x65],ebx",
+    "mov DWORD PTR[ebp+ecx*4],ebx",
+    "mov DWORD PTR[ebp+ecx*4+0x65127698],ebx",
+    "sbb edx,DWORD PTR[0x5555551E]",
+    "xor r12,0x1234",
+    "xor r9b,BYTE PTR[rbp]",
+    "dec QWORD PTR [0x5555551E]",
+    "inc r15",
+    "cmp r8,rdx",
+    "test r8d,edx",
+    "cmp  r8w,bx",
+    "test r9b,cl",
+    "xchg QWORD PTR[rbp+0x5555551E],r12",
+    "xadd QWORD PTR[rdx+0x5555551E],r11",
+    "imul r9w,WORD PTR[r14]",
+    "idiv QWORD PTR[r12*4]",
+    "bsf r12,QWORD PTR[r8+r13*4+0x48]",
+    "bsr r12,QWORD PTR[rbx+r13*1]",
+    "bsr r12,QWORD PTR[rbx+r13*1+0x48]",
+    "bsr r12,QWORD PTR[rbp+r12*1]",
+    "jmp r9",
+    "jmp QWORD PTR[r9+r12*8]",
+    # "ja end",
+    # "jae end",
+    # "jc l2",
+    # "jnc end",
+    # "jp end",
+    # "jns end",
+    # "jnae end",
+    # "jnge end",
+    # "jl l2",
+    # "jnl l2 ",
+    # "jg end",
+    # "jle end",
+    # "jrcxz l1",
+    # "jrcxz l2",
+    "shl word [eax+ecx +0x94],5",
+    "shl qword [r8d+r9d+0x94],1",
+    "shr qword [rbx+rcx +0x94],cl",
+    "neg r14",
+    "not QWORD PTR[r13]",
+    "call testp",
+    "call r10",
+    "call QWORD PTR[r10+r11*8]",
+    "mov QWORD PTR[rcx*4+0x8],0x34",
+    "sub DWORD PTR[ebp+ecx*4],edx",
+    "sub QWORD PTR[rbp+rcx*4],rdx",
+    "sbb QWORD PTR[rbp+rcx*4+0x94],rdx",
+    "jmp QWORD PTR[r9+r13*8+0x9876]",
+    "push r13",
+    "push QWORD PTR [r13+r12*8]",
+    "pop r15",
+    "pop QWORD PTR[rbp+r12*8+0x45]",
+    "mov rax,0x60",
+    "xor rdi,rdi",
+    "syscall",
+    "push rdx",
+    "mov al,BYTE PTR[rbx]",
+    "add bl,BYTE PTR[rcx]",
+    "pop rdx",
+    "ret",
 ]
+asyncio.run(run_test(sample))
+
+end()
