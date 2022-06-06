@@ -1,13 +1,13 @@
+import asyncio
+import aiohttp
 import re
 import sys
 from assembler import get_code, hex_to_binary, print_binary_formatted
 
-import requests
-
 import urllib.parse
 
 
-def get_answer_from_site(input):
+async def get_answer_from_site(input, session):
     url = "https://defuse.ca/online-x86-assembler.htm"
 
     payload = (
@@ -21,24 +21,75 @@ def get_answer_from_site(input):
         "Referer": "https://defuse.ca/online-x86-assembler.htm",
     }
 
-    response = requests.request("POST", url, data=payload, headers=headers)
-    answer = re.findall(r"\d:\s&nbsp;([\w\s]+)\s", response.text)
-    result = "".join(answer)
-    result = result.replace(" ", "").strip()
-    return result
+    async with session.post(url, data=payload, headers=headers) as response:
+        text = await response.text()
+        answer = re.findall(r"\d:\s&nbsp;([\w\s]+)\s", text)
+        result = "".join(answer)
+        result = result.replace(" ", "").strip()
+        return result
 
 
-instructions = ["mov", "add"]
-two_operands = [
+async def run_test(test_cases, operation=None):
+    async with aiohttp.ClientSession() as session:
+        for test in test_cases:
+            if operation and not test.split(" ")[0] == operation:
+                continue
+            my_code = get_code(test)
+            from_site = await get_answer_from_site(test, session)
+            if not from_site:
+                continue
+            if my_code != from_site:
+                print(f"wrong answer for {test}")
+                print(f"site: {from_site}")
+                print(f"my code: {my_code}")
+                print("BINARY")
+                print(
+                    "g", print_binary_formatted(hex_to_binary("0x" + my_code))
+                )
+                print(
+                    "e",
+                    print_binary_formatted(hex_to_binary("0x" + from_site)),
+                )
+                sys.exit()
+
+
+reg_to_reg_operands = [
     # reg to reg
     "al,bh",
     "dl,bl",
     "cl,al",
     "cx,ax",
     "ecx,eax",
+]
+reg_to_mem_operands = [
+    "BYTE PTR[rax+rcx*1+0x94],cl",
+    "QWORD PTR [rbx+0x5555551e],r10",
+    "QWORD PTR [rbp+0x5555551e],r11",
+    "QWORD PTR [rbx*1+0x1],r10",
+    "QWORD PTR [ebp+0x5555551e],r11",
+    "QWORD PTR [rax+rcx*1+0x94],rcx",
+    "DWORD PTR [ecx*4],ebx",
+]
+imm_to_reg_operands = [
     # imm to reg
     "dx,0x1352",
     "dx,0x3545",
+    # "rax,0x60",
+    # "rax,0x95",
+    # "rax,0x94",
+    # "rax,0x79",
+    # "rbx,0x5",
+    # "rbx,0x95",
+    # "rbx,0x94",
+    # "rbx,0x79",
+]
+imm_to_mem_operands = [
+    # imm to mem
+    "WORD PTR [eax+ecx*1+0x94],0x5",
+    "QWORD PTR [eax+ecx*1+0x94],0x5",
+    "QWORD PTR [rcx*4+0x8],0x34",
+]
+mem_to_reg_operands = [
     # mem to reg
     "edx,DWORD PTR [ecx*4]",
     "edi,DWORD PTR [ebx]",
@@ -52,14 +103,9 @@ two_operands = [
     "edx,DWORD PTR [ebp+ecx*4+0x06]",
     # mem to eax(edge case)
     "eax,DWORD PTR [ebp+ecx*4+0x06]",
-    # imm to mem
-    "WORD PTR[eax+ecx*1+0x94],0x5",
-    # with 64 bit registers
-    "BYTE PTR[rax+rcx*1+0x94],cl",
     "rdx,QWORD PTR [rcx*4]",
     "rdi,QWORD PTR [rbx]",
     "rdx,QWORD PTR [ebp+ecx*4]",
-    "QWORD PTR[eax+ecx*1+0x94],0x5",
     "rdx,QWORD PTR [eax+ecx*1+0x55]",
     "rdx,QWORD PTR [eax+ecx*1]",
     "rdx,QWORD PTR [0x5555551E]",
@@ -67,49 +113,110 @@ two_operands = [
     "rdx,QWORD PTR [ebx+ecx*4]",
     "rdx,QWORD PTR [ebp+ecx*4+0x55555506]",
     "rdx,QWORD PTR [ebp+ecx*4+0x06]",
-    "QWORD PTR[rax+rcx*1+0x94],rcx",
     "r11,QWORD PTR [r8+r12*4+0x16]",
     "r11,QWORD PTR [rbp+0x5555551e]",
     "r11,QWORD PTR [rbp+r12*1]",
-    "QWORD PTR [ebp+0x5555551e],r11",
     "r8w,WORD PTR [r14]",
     "r8b,BYTE PTR [rbp]",
-    "QWORD PTR [rbx+0x5555551e],r10",
-    "QWORD PTR [rbp+0x5555551e],r11",
-    "QWORD PTR [rbx*1+0x1],r10",
+    "r9w,WORD PTR[r14]",
+    "r12,QWORD PTR [r8+r13*4+0x48]",
+    "r12,QWORD PTR [rbx+r13*1]",
+    "r12,QWORD PTR [rbx+r13*1+0x48]",
+    "r12,QWORD PTR [rbp+r12*1]",
 ]
 
 
-def run_test(test_cases, operation=None):
-    for test in test_cases:
-        if operation and not test.split(" ")[0] == operation:
-            continue
-        my_code = get_code(test)
-        from_site = get_answer_from_site(test)
-        if my_code != from_site:
-            print(f"wrong answer for {test}")
-            print(f"site: {from_site}")
-            print(f"my code: {my_code}")
-            print("BINARY")
-            print("g", print_binary_formatted(hex_to_binary("0x" + my_code)))
-            print("e", print_binary_formatted(hex_to_binary("0x" + from_site)))
-            sys.exit()
+two_operands = (
+    reg_to_reg_operands
+    + imm_to_reg_operands
+    + reg_to_mem_operands
+    + mem_to_reg_operands
+    + imm_to_mem_operands
+)
 
+single_operands = [
+    "r9",
+    "QWORD PTR [r9]",
+    "r10",
+    "QWORD PTR [0x5555551e]",
+    "QWORD PTR [0x20]",
+    "DWORD PTR [0x5555551e]",
+    "r15",
+    "QWORD PTR [r12*4]",
+    "QWORD PTR [r9+r12*8]",
+    "QWORD PTR [r10+r11*8]",
+]
+
+bsf_bsr = [
+    "r12,QWORD PTR [r8+r13*4+0x48]",
+    "r12,QWORD PTR [rbx+r13*1]",
+    "r12,QWORD PTR [rbx+r13*1+0x48]",
+    "r12,QWORD PTR [rbp+r12*1]",
+] + mem_to_reg_operands
+
+imul_cases = reg_to_reg_operands + reg_to_mem_operands + mem_to_reg_operands
+
+instructions = [
+    "mov",
+    "add",
+    "adc",
+    "and",
+    "cmp",
+    "or",
+    # "shl",
+    # "shr",
+    # "test",
+    # "xor",
+    # "sub",
+    # "sbb",
+]
+
+one_operand_instructions = [
+    "call",
+    "dec",
+    "inc",
+    "idiv",
+    "jmp",
+    # "ret",
+    # "not",
+    # "neg",
+    # "shl",
+    # "shr",
+]
 
 test_cases = []
-# all two operands
+# normal two operands
 for ins in instructions:
     for operand in two_operands:
+        if ins == "or" and operand in [
+            "rax,0x5",
+            "rax,0x95",
+            "rax,0x94",
+            "rax,0x79",
+        ]:
+            continue
         test_cases.append(f"{ins} {operand}")
+
+# bsf, bsr two operands
+for ins in ["bsf", "bsr"]:
+    for operand in bsf_bsr:
+        test_cases.append(f"{ins} {operand}")
+
+for ins in one_operand_instructions:
+    for operand in single_operands:
+        test_cases.append(f"{ins} {operand}")
+
+for operand in imul_cases:
+    test_cases.append(f"imul {operand}")
+
+test_cases.extend(["stc", "clc", "std", "cld", "syscall", "ret"])
 
 # all one operands
 # no operands
-# run_test(test_cases, "mov")
-run_test(test_cases, "add")
 
-# run_test(test_cases)
+# asyncio.run(run_test(test_cases, "add"))
 
-
+asyncio.run(run_test(test_cases))
 sample = [
     "mov WORD PTR[eax+ecx*1+0x94],0x5",
     "mov r11,QWORD PTR [r8+r12*4+0x16]",
@@ -139,6 +246,7 @@ sample = [
     "mov QWORD PTR [rbp+0x5555551e],r11",
     "mov edx,DWORD PTR [ebx+ecx*4]",
     "mov QWORD PTR [rbx*1+0x1],r10",
+    "mov rax,0x60",
     "add ecx,eax",
     "add cx,ax",
     "add edi,DWORD PTR [ebx]",

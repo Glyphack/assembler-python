@@ -2,7 +2,7 @@ import logging as logger
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 logger.basicConfig(level=logger.DEBUG)
 
@@ -403,6 +403,9 @@ class OpCode:
     disp_size: Optional[int] = None
     only_rex_new_register: bool = False
     b_extends_reg: bool = False
+    use_small_disp: bool = False
+    prefix_smaller_than_64_operands: bool = False
+    complex_reg: Optional[Callable[[Any], str]] = None
 
 
 # Operation: second: first
@@ -420,6 +423,12 @@ opcode_table: Dict[
             ),
         },
         OperandTypes.IMMEDIATE: {
+            "rax": OpCode(
+                opcode="110001", mod=MOD_32.REG_ADDR, reg="000", rm_codes=1
+            ),
+            "rbx": OpCode(
+                opcode="110001", mod=MOD_32.REG_ADDR, reg="000", rm_codes=1
+            ),
             OperandTypes.REGISTER: OpCode(
                 opcode="1011",
                 skip_d=True,
@@ -451,6 +460,12 @@ opcode_table: Dict[
             OperandTypes.REGISTER: OpCode(opcode="000000", d=1)
         },
         OperandTypes.IMMEDIATE: {
+            "rax": OpCode(
+                opcode="01001000100000",
+                rm_codes=1,
+                skip_rex=True,
+                use_small_disp=True,
+            ),
             OperandTypes.REGISTER: OpCode(
                 opcode="100000",
                 skip_d=True,
@@ -458,6 +473,7 @@ opcode_table: Dict[
                 reg="000",
                 # check
                 rm_codes=1,
+                use_small_disp=True,
             ),
             OperandTypes.MEMORY: OpCode(
                 opcode="100000",
@@ -466,6 +482,7 @@ opcode_table: Dict[
                 reg="000",
                 # check
                 rm_codes=1,
+                use_small_disp=True,
             ),
         },
     },
@@ -486,6 +503,7 @@ opcode_table: Dict[
                 mod=MOD_32.REG_ADDR,
                 reg="010",
                 rm_codes=1,
+                use_small_disp=True,
             ),
             OperandTypes.MEMORY: OpCode(
                 opcode="100000",
@@ -493,11 +511,245 @@ opcode_table: Dict[
                 skip_s=False,
                 reg="010",
                 rm_codes=1,
+                use_small_disp=True,
             ),
         },
         OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(
                 opcode="000100",
+            ),
+        },
+    },
+    "and": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="001000",
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="001000",
+            ),
+        },
+        OperandTypes.IMMEDIATE: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="100000",
+                skip_d=True,
+                skip_s=False,
+                mod=MOD_32.REG_ADDR,
+                reg="100",
+                rm_codes=1,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100000",
+                reg="100",
+                rm_codes=1,
+                use_small_disp=True,
+                skip_d=True,
+                skip_s=False,
+            ),
+        },
+        OperandTypes.MEMORY: {OperandTypes.REGISTER: OpCode(opcode="001000")},
+    },
+    "bsf": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="0000111110111100", mod=MOD_32.REG_ADDR
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="00001111101111", d=0, w=0, rm_codes=2, reg_codes=1
+            ),
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="00001111101111", d=0, w=0, rm_codes=2, reg_codes=1
+            ),
+        },
+    },
+    "bsr": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=1),
+            OperandTypes.MEMORY: OpCode(
+                opcode="00001111101111", d=0, w=1, reg_codes=1, rm_codes=2
+            ),
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="00001111101111", d=0, w=1, rm_codes=2, reg_codes=1
+            ),
+        },
+    },
+    # operand size compatibilty
+    "call": {
+        OperandTypes.NOT_EXIST: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="111111",
+                mod=MOD_32.REG_ADDR,
+                d=1,
+                w=1,
+                reg="010",
+                rm_codes=1,
+                rex_w=0,
+                prefix_smaller_than_64_operands=True,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="111111",
+                d=1,
+                w=1,
+                r=0,
+                complex_reg=lambda x: "011"
+                if x.first_operand.get_operand_size() == 32
+                else "010",
+                rm_codes=1,
+                rex_w=0,
+                prefix_smaller_than_64_operands=True,
+                only_rex_new_register=True,
+            ),
+        }
+    },
+    "cmp": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="001110",
+                d=0,
+            ),
+            OperandTypes.MEMORY: OpCode(opcode="001110", d=0),
+            OperandTypes.IMMEDIATE: OpCode(
+                opcode="100000",
+                skip_s=False,
+                skip_d=True,
+                mod=MOD_32.REG_ADDR,
+                reg="111",
+                rm_codes=1,
+            ),
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(opcode="001110"),
+            OperandTypes.IMMEDIATE: OpCode(
+                opcode="100000",
+                skip_s=False,
+                skip_d=True,
+                mod=MOD_32.REG_ADDR,
+                reg="111",
+                rm_codes=1,
+                use_small_disp=True,
+            ),
+        },
+        OperandTypes.IMMEDIATE: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="100000",
+                skip_s=False,
+                skip_d=True,
+                mod=MOD_32.REG_ADDR,
+                reg="111",
+                rm_codes=1,
+                use_small_disp=True,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100000",
+                skip_d=True,
+                skip_s=False,
+                reg="111",
+                rm_codes=1,
+                use_small_disp=True,
+            ),
+        },
+    },
+    "inc": {
+        OperandTypes.REGISTER: {
+            OperandTypes.NOT_EXIST: OpCode(opcode="111111", d=1, reg="000")
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.NOT_EXIST: OpCode(opcode="111111", d=1, reg="000")
+        },
+    },
+    "idiv": {
+        OperandTypes.MEMORY: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111101",
+                reg="111",
+            )
+        },
+        OperandTypes.REGISTER: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111101", reg="111", mod=MOD_32.REG_ADDR, d=1
+            )
+        },
+    },
+    # one operand not supported
+    "imul": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(
+                opcode="00001111101011",
+                d=1,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="00001111101011", d=1, reg_codes=2, rm_codes=1
+            ),
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.REGISTER: OpCode(opcode="00001111101011", d=1),
+        },
+    },
+    # TODO: other jumps
+    "jmp": {
+        OperandTypes.REGISTER: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111111",
+                reg="100",
+                mod=MOD_32.REG_ADDR,
+                d=1,
+                r=0,
+                x=0,
+                rex_w=0,
+                only_rex_new_register=True,
+                prefix_smaller_than_64_operands=True,
+            )
+        },
+        OperandTypes.MEMORY: {
+            OperandTypes.NOT_EXIST: OpCode(
+                opcode="111111",
+                complex_reg=lambda x: "101"
+                if x.first_operand.get_operand_size() == 32
+                else "100",
+                d=1,
+                r=0,
+                rex_w=0,
+                only_rex_new_register=True,
+                prefix_smaller_than_64_operands=True,
+            )
+        },
+    },
+    "or": {
+        OperandTypes.REGISTER: {
+            OperandTypes.REGISTER: OpCode(opcode="000010"),
+            OperandTypes.MEMORY: OpCode(opcode="000010"),
+        },
+        OperandTypes.MEMORY: {OperandTypes.REGISTER: OpCode(opcode="000010")},
+        # i don't know
+        OperandTypes.IMMEDIATE: {
+            "rax": OpCode(
+                opcode="01001000100000",
+                skip_prefix=True,
+                skip_rex=True,
+                reg="001",
+                rm_codes=1,
+                use_small_disp=True,
+            ),
+            OperandTypes.REGISTER: OpCode(
+                opcode="100000",
+                skip_s=False,
+                skip_d=True,
+                mod=MOD_32.REG_ADDR,
+                reg="001",
+                rm_codes=1,
+                use_small_disp=True,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="100000",
+                skip_s=False,
+                skip_d=True,
+                reg="001",
+                rm_codes=1,
+                use_small_disp=True,
             ),
         },
     },
@@ -519,11 +771,6 @@ opcode_table: Dict[
             ),
         },
     },
-    "imul": {
-        OperandTypes.MEMORY: {
-            OperandTypes.REGISTER: OpCode(opcode="00001111101011", d=1),
-        }
-    },
     "xor": {
         OperandTypes.MEMORY: {
             OperandTypes.REGISTER: OpCode(opcode="001100"),
@@ -532,60 +779,6 @@ opcode_table: Dict[
     "xadd": {
         OperandTypes.REGISTER: {
             OperandTypes.MEMORY: OpCode(opcode="00001111110000"),
-        }
-    },
-    "bsf": {
-        OperandTypes.MEMORY: {
-            OperandTypes.REGISTER: OpCode(
-                opcode="00001111101111", d=0, w=0, rm_codes=2, reg_codes=1
-            ),
-        }
-    },
-    "bsr": {
-        OperandTypes.MEMORY: {
-            OperandTypes.REGISTER: OpCode(
-                opcode="00001111101111", d=0, w=1, rm_codes=2, reg_codes=1
-            ),
-        },
-        OperandTypes.REGISTER: {
-            OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=1),
-            OperandTypes.MEMORY: OpCode(
-                opcode="00001111101111", d=0, w=1, reg_codes=1, rm_codes=2
-            ),
-        },
-    },
-    "idiv": {
-        OperandTypes.MEMORY: {
-            OperandTypes.NOT_EXIST: OpCode(
-                opcode="111101",
-                reg="111",
-            )
-        },
-    },
-    "jmp": {
-        OperandTypes.REGISTER: {
-            OperandTypes.NOT_EXIST: OpCode(
-                opcode="111111",
-                reg="100",
-                mod=MOD_32.REG_ADDR,
-                d=1,
-                r=0,
-                x=0,
-                rex_w=0,
-            )
-        },
-        OperandTypes.MEMORY: {
-            OperandTypes.NOT_EXIST: OpCode(
-                opcode="111111", reg="100", d=1, r=0, rex_w=0
-            )
-        },
-    },
-    "cmp": {
-        OperandTypes.REGISTER: {
-            OperandTypes.REGISTER: OpCode(
-                opcode="001110",
-                d=0,
-            )
         }
     },
     "xchg": {
@@ -598,19 +791,16 @@ opcode_table: Dict[
             ),
         },
     },
+    # use_small
     "sub": {
         OperandTypes.REGISTER: {
             OperandTypes.MEMORY: OpCode(opcode="001010"),
         }
     },
+    # use small
     "sbb": {
         OperandTypes.REGISTER: {
             OperandTypes.MEMORY: OpCode(opcode="000110"),
-        }
-    },
-    "inc": {
-        OperandTypes.REGISTER: {
-            OperandTypes.NOT_EXIST: OpCode(opcode="111111", d=1, reg="000")
         }
     },
     "dec": {
@@ -650,26 +840,10 @@ opcode_table: Dict[
             )
         }
     },
-    "call": {
-        OperandTypes.NOT_EXIST: {
-            OperandTypes.REGISTER: OpCode(
-                opcode="111111",
-                mod=MOD_32.REG_ADDR,
-                d=1,
-                w=1,
-                reg="010",
-                rm_codes=1,
-                rex_w=0,
-            ),
-            OperandTypes.MEMORY: OpCode(
-                opcode="111111", d=1, w=1, reg="010", rm_codes=1, rex_w=0
-            ),
-        }
-    },
     "ret": {
         OperandTypes.NOT_EXIST: {
             OperandTypes.NOT_EXIST: OpCode(
-                opcode="11000010",
+                opcode="11000011",
                 skip_prefix=True,
                 skip_rex=True,
                 skip_d=True,
@@ -1051,8 +1225,8 @@ def operand_require_rex(operand: Operand) -> bool:
             )
             return True
     elif operand.get_type() == OperandTypes.MEMORY:
-        if operand.get_operand_size() == 64:
-            print("require rex because operand with size 64 is used")
+        if operand.get_operand_size() == 64 and operand.get_registers_used():
+            print("require rex because memory with 64 bit register is used")
             return True
         for reg in operand.get_registers_used():
             if reg.startswith("r") and reg[1].isnumeric():
@@ -1060,6 +1234,9 @@ def operand_require_rex(operand: Operand) -> bool:
                     "require rex because a new operand is used in memory addressing"
                 )
                 return True
+        if operand.get_operand_size() == 64:
+            print("require rex because 64 bit size memory is used")
+            return True
     return False
 
 
@@ -1096,7 +1273,12 @@ def get_prefix(input: Input) -> Optional[str]:
     )
 
     prefix1 = operand_prefix_table.get(size, False)
+    if get_opcode(input).prefix_smaller_than_64_operands and size < 64:
+        prefix1 = True
     prefix2 = address_prefix_table.get(address, False)
+    # don't know
+    # if get_opcode(input).prefix_smaller_than_64_operands and address < 64:
+    # prefix2 = True
 
     prefix = ""
     if prefix1 is True:
@@ -1121,7 +1303,6 @@ def get_source_and_dest_operands(
 
 
 def get_opcode(input: Input) -> OpCode:
-    """Returns the opcode"""
     operation = input.operation
     operand_src, operand_dest = get_source_and_dest_operands(input)
     operation_modes = opcode_table.get(operation)
@@ -1129,8 +1310,8 @@ def get_opcode(input: Input) -> OpCode:
         raise ValueError(f"Operation {operation} not found")
     result = operation_modes
     if operand_src:
-        result = result.get(operand_src.get_type()) or result.get(
-            operand_src._raw
+        result = operation_modes.get(operand_src._raw) or operation_modes.get(
+            operand_src.get_type()
         )
 
         if not result:
@@ -1145,7 +1326,9 @@ def get_opcode(input: Input) -> OpCode:
             )
 
     if operand_dest:
-        result = result.get(operand_dest.get_type())
+        result = result.get(operand_dest._raw) or result.get(
+            operand_dest.get_type()
+        )
         if not result:
             raise ValueError(
                 f"Operation {operation} with first operand type {operand_src} and second operand type {operand_dest} not found"
@@ -1189,8 +1372,13 @@ def get_s(input: Input) -> Optional[int]:
         return None
 
     imm_data_size = len(hex_to_binary(hex(input.second_operand.get_value())))
+    imm_value_size = get_imm_data_size(input)
     print(f"immediate data size is {imm_data_size}")
-    if imm_data_size < 8:
+    if imm_value_size <= 8:
+        return 1
+    else:
+        return 0
+    if imm_data_size <= 8:
         return 1
     return 0
 
@@ -1319,6 +1507,9 @@ def get_reg(input: Input) -> Optional[str]:
         return None
     if opcode.reg is not None:
         return opcode.reg
+    if opcode.complex_reg is not None:
+        return opcode.complex_reg(input)
+
     to_code = select_operand_to_code_with_reg(input)
     if to_code is None:
         raise ValueError(f"No second operand for {to_code}")
@@ -1394,6 +1585,54 @@ def get_sib(input: Input) -> Optional[str]:
     return scale + index + base
 
 
+def select_operand_with_imm_data(input: Input) -> Optional[Operand]:
+    imm_val_op = None
+    other_op = None
+    for op in [input.first_operand, input.second_operand]:
+        if op and op.get_type() == OperandTypes.IMMEDIATE:
+            imm_val_op = op
+        else:
+            other_op = op
+    if imm_val_op is None:
+        return
+    return imm_val_op
+
+
+def get_imm_data_size(input: Input) -> Optional[int]:
+    other_op = input.first_operand
+    imm_data_op = select_operand_with_imm_data(input)
+    if imm_data_op is None:
+        return
+    if imm_data_op == other_op:
+        other_op = input.second_operand
+    if other_op is None:
+        raise NotImplementedError()
+    other_op_size = other_op.get_operand_size()
+    size = other_op_size
+    value = imm_data_op.get_value()
+
+    if other_op_size > 16:
+        print(
+            f"immediate data is used with {other_op_size} bits operand extended to 32"
+        )
+        size = 32
+    if get_opcode(input).disp_size:
+        print(
+            f"this operand codes immediate data  with {get_opcode(input).disp_size} bits displacement"
+        )
+        size = get_opcode(input).disp_size
+    if get_opcode(input).use_small_disp:
+        if value <= 128:
+            print(f"immediate data is small enough use 8 bit displacement")
+            size = 8
+        elif value <= 4294967296 and 32 <= other_op_size:
+            print(
+                f"immediate data 32 bit extended fits into other operand with size {other_op_size}"
+            )
+            size = 32
+    return size
+
+
 def get_data(input: Input) -> Optional[str]:
     imm_val_op = None
     other_op = None
@@ -1409,21 +1648,7 @@ def get_data(input: Input) -> Optional[str]:
     print(f"coding immediate data {imm_val_op}")
     value = imm_val_op.get_value()
     real_value = hex_to_binary(hex(value))
-    size = other_op.get_operand_size()
-    real_value_size = len(real_value)
-    if size > 16:
-        print(
-            f"immediate data is used with {size} bits operand extended to 32"
-        )
-        size = 32
-    if get_opcode(input).disp_size:
-        print(
-            f"this operand codes immediate data  with {get_opcode(input).disp_size} bits displacement"
-        )
-        size = get_opcode(input).disp_size
-    if real_value_size <= 8:
-        print(f"immediate data is small enough use 8 bit displacement")
-        size = 8
+    size = get_imm_data_size(input)
     return format(
         int(real_value, 2),
         f"0{size}b",
@@ -1528,7 +1753,11 @@ def get_rex(input: Input) -> Optional[str]:
         if operand is None:
             continue
         if get_opcode(input).only_rex_new_register:
-            if register_table_64.get(operand._raw, "0")[0] == "0":
+            new_reg = False
+            for reg in operand.get_registers_used():
+                if register_table_64.get(reg, "0")[0] == "1":
+                    new_reg = True
+            if new_reg is False:
                 continue
         if operand_require_rex(operand):
             need_rex = True
