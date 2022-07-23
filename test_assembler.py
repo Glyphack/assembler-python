@@ -61,8 +61,7 @@ async def run_test(test_cases, operation=None):
             if my_code != from_site:
                 print(f"wrong answer for {test}")
                 print(f"site: {from_site}")
-                print(f"my code: {my_code}")
-                print("BINARY")
+                print(f"code: {my_code}")
                 print("g", get_binary_formatted(hex_to_binary("0x" + my_code)))
                 print(
                     "e",
@@ -111,6 +110,7 @@ imm_to_reg_operands = [
     "dx,0x7891",
     "di,0x1543",
     "r12,0x1234"
+    # edge cases!
     # "rax,0x60",
     # "rax,0x95",
     # "rax,0x94",
@@ -234,8 +234,7 @@ one_operand_instructions = [
     "inc",
     "idiv",
     "jmp",
-    # "jcc"
-    "neg",
+    "jcc" "neg",
     "not",
     "call" "shl",
     "shr",
@@ -253,20 +252,20 @@ test_cases = [
     "syscall",
     "ret",
     "jmp end",
-    # "ja end",
-    # "jae end",
-    # "jc l2",
-    # "jnc end",
-    # "jp end",
-    # "jns end",
-    # "jnae end",
-    # "jnge end",
-    # "jl l2",
-    # "jnl l2 ",
-    # "jg end",
-    # "jle end",
-    # "jrcxz l1",
-    # "jrcxz l2",
+    "ja end",
+    "jae end",
+    "jc l2",
+    "jnc end",
+    "jp end",
+    "jns end",
+    "jnae end",
+    "jnge end",
+    "jl l2",
+    "jnl l2 ",
+    "jg end",
+    "jle end",
+    "jrcxz l1",
+    "jrcxz l2",
 ]
 # normal two operands
 for ins in instructions:
@@ -291,13 +290,6 @@ for ins in one_operand_instructions:
 
 for operand in imul_cases:
     test_cases.append(f"imul {operand}")
-
-# all one operands
-# no operands
-
-# asyncio.run(run_test(test_c   ases,"not"))
-
-asyncio.run(run_test(test_cases))
 
 sample = [
     "mov WORD PTR[eax+ecx*1+0x94],0x5",
@@ -535,7 +527,17 @@ sample = [
     "add bl,BYTE PTR[rcx]",
     "pop rdx",
     "ret",
+    "shr rax,7",
+    "shr rbx,2",
+    "shr QWORD PTR[rbx], 2",
+    "shr rax",
+    "shr rax, cl",
+    "shr rcx",
+    "shr rbx",
+    "shr QWORD PTR[rbx+0x94]",
 ]
-asyncio.run(run_test(sample))
+
+# asyncio.run(run_test(sample.extend(test_cases)))
+asyncio.run(run_test(["xor DWORD PTR[r11+rbp*4],eax"]))
 
 end()

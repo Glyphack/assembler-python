@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-logger.basicConfig(level=logger.INFO)
+logger.basicConfig(level=logger.DEBUG)
 
 REGISTER_8_BIT = {
     "al",
@@ -572,7 +572,9 @@ opcode_table: Dict[
     },
     "bsr": {
         OperandTypes.REGISTER: {
-            OperandTypes.REGISTER: OpCode(opcode="00001111101111", d=0, w=1),
+            OperandTypes.REGISTER: OpCode(
+                opcode="00001111101111", d=0, w=1, rm_codes=2, reg_codes=1
+            ),
             OperandTypes.MEMORY: OpCode(
                 opcode="00001111101111", d=0, w=1, reg_codes=1, rm_codes=2
             ),
@@ -983,7 +985,12 @@ opcode_table: Dict[
                 opcode="110000", reg="100", d=0, disp_size=8
             ),
             OperandTypes.REGISTER: OpCode(
-                opcode="110000", reg="100", disp_size=8
+                opcode="110000",
+                reg="100",
+                disp_size=8,
+                rm_codes=1,
+                mod=MOD_32.REG_ADDR,
+                d=0,
             ),
         },
         OperandTypes.NOT_EXIST: {
@@ -1009,7 +1016,12 @@ opcode_table: Dict[
                 opcode="110000", reg="101", d=0, disp_size=8
             ),
             OperandTypes.REGISTER: OpCode(
-                opcode="110000", reg="101", mod=MOD_32.REG_ADDR, disp_size=8
+                opcode="110000",
+                reg="101",
+                disp_size=8,
+                rm_codes=1,
+                mod=MOD_32.REG_ADDR,
+                d=0,
             ),
         },
         OperandTypes.NOT_EXIST: {
@@ -1019,6 +1031,30 @@ opcode_table: Dict[
             ),
         },
         "cl": {
+            OperandTypes.REGISTER: OpCode(
+                opcode="110100",
+                reg="101",
+                d=1,
+                mod=MOD_32.REG_ADDR,
+                rm_codes=1,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="110100", reg="101", d=1, rm_codes=1
+            ),
+        },
+        "rcx": {
+            OperandTypes.REGISTER: OpCode(
+                opcode="110100",
+                reg="101",
+                d=1,
+                mod=MOD_32.REG_ADDR,
+                rm_codes=1,
+            ),
+            OperandTypes.MEMORY: OpCode(
+                opcode="110100", reg="101", d=1, rm_codes=1
+            ),
+        },
+        "rbx": {
             OperandTypes.REGISTER: OpCode(
                 opcode="110100",
                 reg="101",
@@ -1380,7 +1416,7 @@ class Operand:
 
     def _get_address(self) -> Optional[str]:
         if self.get_type() == OperandTypes.MEMORY:
-            return self._raw.split("[")[1].removesuffix("]")
+            return self._raw.split("[")[1].replace("]", "")
 
 
 @dataclass
@@ -1407,12 +1443,12 @@ class Input:
 
 
 def adjust_operands(operation: str, operand: Operand):
+    if operand._raw.isnumeric():
+        operand._raw = hex(int(operand._raw))
     if "[r13" in operand._raw and operand.get_disp() is None:
         logger.debug("added a 0 displacement because r13 is base")
         return Operand(operand._raw.replace("]", "+0x0]"))
     if operation in ["shl", "shr"]:
-        if operand._raw in ["rcx", "ecx", "cx"]:
-            operand._raw = "cl"
         if operand._raw == "0x1":
             operand = None
     if operation in ["call", "jmp"]:
@@ -1420,7 +1456,6 @@ def adjust_operands(operation: str, operand: Operand):
             ope_type = operand.get_type()
         except:
             operand._raw = "0x0"
-
     return operand
 
 
@@ -1602,7 +1637,6 @@ def get_opcode(input: Input) -> OpCode:
             raise ValueError(
                 f"Operation {operation} with single first operand type {operand_src}"
             )
-
     return result
 
 
@@ -2045,6 +2079,7 @@ def get_code(asm_instruction: str):
     input = parse_instruction(asm_instruction)
     logger.debug(input)
     op_code = get_opcode(input)
+    logger.debug(op_code)
     result = ""
 
     prefix = get_prefix(input)
